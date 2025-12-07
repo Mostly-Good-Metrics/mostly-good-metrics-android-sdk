@@ -35,12 +35,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ```
  */
 class MostlyGoodMetrics private constructor(
-    private val context: Context,
-    private val configuration: MGMConfiguration
+    private val context: Context?,
+    private val configuration: MGMConfiguration,
+    private val storage: EventStorage,
+    private val networkClient: NetworkClientInterface,
+    private val prefs: SharedPreferences?
 ) {
-    private val storage: EventStorage = FileEventStorage(context, configuration.maxStoredEvents)
-    private val networkClient: NetworkClient = NetworkClient(configuration)
-    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    /**
+     * Primary constructor for production use.
+     */
+    private constructor(
+        context: Context,
+        configuration: MGMConfiguration
+    ) : this(
+        context = context,
+        configuration = configuration,
+        storage = FileEventStorage(context, configuration.maxStoredEvents),
+        networkClient = NetworkClient(configuration),
+        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var flushJob: Job? = null
@@ -75,18 +88,20 @@ class MostlyGoodMetrics private constructor(
         MGMLogger.info("Initializing MostlyGoodMetrics SDK")
 
         // Restore user ID
-        userId = prefs.getString(KEY_USER_ID, null)
+        userId = prefs?.getString(KEY_USER_ID, null)
 
         // Start flush timer
         startFlushTimer()
 
-        // Setup lifecycle tracking
-        if (configuration.trackAppLifecycleEvents) {
+        // Setup lifecycle tracking (only when context is available)
+        if (configuration.trackAppLifecycleEvents && context != null) {
             setupLifecycleTracking()
         }
 
-        // Track install/update
-        trackInstallOrUpdate()
+        // Track install/update (only when context is available)
+        if (context != null) {
+            trackInstallOrUpdate()
+        }
     }
 
     /**
@@ -133,7 +148,7 @@ class MostlyGoodMetrics private constructor(
      */
     fun identify(userId: String) {
         this.userId = userId
-        prefs.edit().putString(KEY_USER_ID, userId).apply()
+        prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
         MGMLogger.info("User identified: $userId")
     }
 
@@ -142,7 +157,7 @@ class MostlyGoodMetrics private constructor(
      */
     fun resetIdentity() {
         userId = null
-        prefs.edit().remove(KEY_USER_ID).apply()
+        prefs?.edit()?.remove(KEY_USER_ID)?.apply()
         MGMLogger.info("User identity reset")
     }
 
@@ -251,7 +266,7 @@ class MostlyGoodMetrics private constructor(
 
     private fun trackInstallOrUpdate() {
         val currentVersion = getAppVersion()
-        val storedVersion = prefs.getString(KEY_APP_VERSION, null)
+        val storedVersion = prefs?.getString(KEY_APP_VERSION, null)
 
         when {
             storedVersion == null -> {
@@ -267,13 +282,13 @@ class MostlyGoodMetrics private constructor(
             }
         }
 
-        prefs.edit().putString(KEY_APP_VERSION, currentVersion).apply()
+        prefs?.edit()?.putString(KEY_APP_VERSION, currentVersion)?.apply()
     }
 
     private fun buildProperties(userProperties: Map<String, Any?>?): Map<String, Any?> {
         val systemProperties = mapOf(
             "\$device_type" to getDeviceType(),
-            "\$device_model" to Build.MODEL
+            "\$device_model" to (Build.MODEL ?: "unknown")
         )
 
         return if (userProperties != null) {
@@ -284,8 +299,9 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun getAppVersion(): String {
+        val ctx = context ?: return "unknown"
         return try {
-            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val packageInfo = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             val versionName = packageInfo.versionName ?: "unknown"
             val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 packageInfo.longVersionCode
@@ -300,11 +316,12 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun getOsVersion(): String {
-        return Build.VERSION.RELEASE
+        return Build.VERSION.RELEASE ?: "unknown"
     }
 
     private fun getDeviceType(): String {
-        val metrics = context.resources.displayMetrics
+        val ctx = context ?: return "phone"
+        val metrics = ctx.resources.displayMetrics
         val widthDp = metrics.widthPixels / metrics.density
         return if (widthDp >= 600) "tablet" else "phone"
     }
@@ -463,6 +480,24 @@ class MostlyGoodMetrics private constructor(
                 instance?.shutdown()
                 instance = null
             }
+        }
+
+        /**
+         * Create a test instance with injected dependencies.
+         * For testing only - not for production use.
+         */
+        internal fun createForTesting(
+            configuration: MGMConfiguration,
+            storage: EventStorage,
+            networkClient: NetworkClientInterface
+        ): MostlyGoodMetrics {
+            return MostlyGoodMetrics(
+                context = null,
+                configuration = configuration,
+                storage = storage,
+                networkClient = networkClient,
+                prefs = null
+            )
         }
     }
 }

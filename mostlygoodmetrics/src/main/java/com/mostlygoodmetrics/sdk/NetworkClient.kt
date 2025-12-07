@@ -31,11 +31,21 @@ sealed class SendResult {
 }
 
 /**
+ * Interface for network operations.
+ */
+interface NetworkClientInterface {
+    /**
+     * Send events to the API.
+     */
+    suspend fun sendEvents(payload: MGMEventsPayload): SendResult
+}
+
+/**
  * Network client for sending events to the MostlyGoodMetrics API.
  */
 class NetworkClient(
     private val configuration: MGMConfiguration
-) {
+) : NetworkClientInterface {
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -56,7 +66,7 @@ class NetworkClient(
     /**
      * Send events to the API.
      */
-    suspend fun sendEvents(payload: MGMEventsPayload): SendResult = withContext(Dispatchers.IO) {
+    override suspend fun sendEvents(payload: MGMEventsPayload): SendResult = withContext(Dispatchers.IO) {
         // Check rate limit
         if (isRateLimited) {
             val waitTime = (retryAfterTime - System.currentTimeMillis()) / 1000
