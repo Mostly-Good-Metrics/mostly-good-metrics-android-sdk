@@ -421,6 +421,40 @@ class MostlyGoodMetrics private constructor(
         }
 
         /**
+         * Start a new session using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("startNewSessionStatic")
+        fun startNewSession() {
+            instance?.startNewSession()
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Get the current user ID from the shared instance.
+         */
+        @JvmStatic
+        @get:JvmName("getCurrentUserId")
+        val userId: String?
+            get() = instance?.userId
+
+        /**
+         * Get the current session ID from the shared instance.
+         */
+        @JvmStatic
+        @get:JvmName("getCurrentSessionId")
+        val sessionId: String?
+            get() = instance?.sessionId
+
+        /**
+         * Get the pending event count from the shared instance.
+         */
+        @JvmStatic
+        @get:JvmName("getCurrentPendingEventCount")
+        val pendingEventCount: Int
+            get() = instance?.pendingEventCount ?: 0
+
+        /**
          * Reset the SDK (mainly for testing).
          */
         @JvmStatic

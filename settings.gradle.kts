@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "MostlyGoodMetrics"
 include(":mostlygoodmetrics")
+include(":sample")
