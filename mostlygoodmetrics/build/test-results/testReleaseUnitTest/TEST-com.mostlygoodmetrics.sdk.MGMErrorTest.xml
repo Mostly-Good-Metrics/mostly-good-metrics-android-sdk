@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mostlygoodmetrics.sdk.MGMErrorTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2025-12-07T00:15:59.814Z" hostname="Joshs-MacBook-Air.local" time="0.003">
+  <properties/>
+  <testcase name="InvalidResponse has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.001"/>
+  <testcase name="RateLimited has correct message with retry time" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="ServerError has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="NetworkError has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="BadRequest has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.001"/>
+  <testcase name="UnexpectedStatusCode has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="EncodingError has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="RateLimited handles null retry time" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="Forbidden has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="InvalidEventName has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.0"/>
+  <testcase name="Unauthorized has correct message" classname="com.mostlygoodmetrics.sdk.MGMErrorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

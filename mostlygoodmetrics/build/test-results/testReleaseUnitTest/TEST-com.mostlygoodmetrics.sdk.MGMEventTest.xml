@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mostlygoodmetrics.sdk.MGMEventTest" tests="35" skipped="0" failures="0" errors="0" timestamp="2025-12-07T00:15:59.818Z" hostname="Joshs-MacBook-Air.local" time="0.042">
+  <properties/>
+  <testcase name="event serializes to JSON with snake_case" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.008"/>
+  <testcase name="isValidEventName rejects names with hyphen" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName rejects empty names" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.001"/>
+  <testcase name="create allows null optional fields" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="string properties at max length are not truncated" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.002"/>
+  <testcase name="isValidEventName rejects names with dot" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="event with null fields serializes correctly" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="empty properties map results in null properties" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="create returns event for valid name" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.001"/>
+  <testcase name="create returns null for empty event name" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="properties support arrays of numbers" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="properties support arrays" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="create generates event with timestamp" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName accepts system events with dollar prefix" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.001"/>
+  <testcase name="create includes all metadata" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="create returns null for invalid event name" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="create generates ISO 8601 timestamp" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="event deserializes from JSON" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.002"/>
+  <testcase name="isValidEventName rejects names starting with underscore" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="properties support nested objects" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="string properties are truncated" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName accepts valid names" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName rejects names that are too long" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.001"/>
+  <testcase name="isValidEventName accepts names with underscores" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName rejects names with space" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="roundtrip serialization preserves data" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName accepts single character names" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="properties support mixed arrays" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="create converts properties to JsonObject" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.001"/>
+  <testcase name="isValidEventName rejects names with special characters" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName accepts names at max length" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="properties support deeply nested objects" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="isValidEventName rejects names starting with number" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <testcase name="event with properties serializes correctly" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.025"/>
+  <testcase name="isValidEventName accepts names with numbers after letters" classname="com.mostlygoodmetrics.sdk.MGMEventTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

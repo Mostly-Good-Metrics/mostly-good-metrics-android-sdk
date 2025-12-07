@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2025-12-07T00:15:59.374Z" hostname="Joshs-MacBook-Air.local" time="0.002">
+  <properties/>
+  <testcase name="events include session ID when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="InMemoryEventStorage can be used for testing" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include platform when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include user ID when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include app version when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="clearing storage removes all events" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="event creation validates name before storing" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="multiple events maintain order" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include environment when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include OS version when provided" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.001"/>
+  <testcase name="events can be selectively removed" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events include timestamp" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <testcase name="events are stored with all metadata" classname="com.mostlygoodmetrics.sdk.MostlyGoodMetricsTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
