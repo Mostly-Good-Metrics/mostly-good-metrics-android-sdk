@@ -1,5 +1,6 @@
 package com.mostlygoodmetrics.sdk
 
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -9,6 +10,9 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.GZIPOutputStream
+
+/** SDK version for User-Agent header */
+internal const val SDK_VERSION = "0.1.0"
 
 /**
  * Result of a network send operation.
@@ -95,6 +99,7 @@ class NetworkClient(
 
                 setRequestProperty("X-MGM-Key", configuration.apiKey)
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", buildUserAgent())
 
                 configuration.packageName?.let {
                     setRequestProperty("X-MGM-Bundle-Id", it)
@@ -179,5 +184,10 @@ class NetworkClient(
             gzip.write(data)
         }
         return outputStream.toByteArray()
+    }
+
+    private fun buildUserAgent(): String {
+        val osVersion = Build.VERSION.RELEASE ?: "unknown"
+        return "MostlyGoodMetrics/$SDK_VERSION (Android; OS $osVersion)"
     }
 }
