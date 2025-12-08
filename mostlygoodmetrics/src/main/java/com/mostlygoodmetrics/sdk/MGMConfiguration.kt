@@ -13,7 +13,9 @@ class MGMConfiguration private constructor(
     val flushIntervalSeconds: Long,
     val maxStoredEvents: Int,
     val enableDebugLogging: Boolean,
-    val trackAppLifecycleEvents: Boolean
+    val trackAppLifecycleEvents: Boolean,
+    val wrapperName: String?,
+    val wrapperVersion: String?
 ) {
     /**
      * Builder for creating [MGMConfiguration] instances.
@@ -29,6 +31,8 @@ class MGMConfiguration private constructor(
         private var maxStoredEvents: Int = DEFAULT_MAX_STORED_EVENTS
         private var enableDebugLogging: Boolean = false
         private var trackAppLifecycleEvents: Boolean = true
+        private var wrapperName: String? = null
+        private var wrapperVersion: String? = null
 
         /**
          * Set the base URL for the API endpoint.
@@ -93,6 +97,24 @@ class MGMConfiguration private constructor(
         }
 
         /**
+         * Set the wrapper SDK name (e.g., "react-native", "flutter", "expo").
+         * Used by hybrid framework SDKs to identify themselves.
+         * Default: null (no wrapper)
+         */
+        fun wrapperName(name: String?) = apply {
+            this.wrapperName = name
+        }
+
+        /**
+         * Set the wrapper SDK version.
+         * Used by hybrid framework SDKs to identify their version.
+         * Default: null (no wrapper)
+         */
+        fun wrapperVersion(version: String?) = apply {
+            this.wrapperVersion = version
+        }
+
+        /**
          * Build the configuration instance.
          */
         fun build(): MGMConfiguration {
@@ -107,7 +129,9 @@ class MGMConfiguration private constructor(
                 flushIntervalSeconds = flushIntervalSeconds,
                 maxStoredEvents = maxStoredEvents,
                 enableDebugLogging = enableDebugLogging,
-                trackAppLifecycleEvents = trackAppLifecycleEvents
+                trackAppLifecycleEvents = trackAppLifecycleEvents,
+                wrapperName = wrapperName,
+                wrapperVersion = wrapperVersion
             )
         }
     }

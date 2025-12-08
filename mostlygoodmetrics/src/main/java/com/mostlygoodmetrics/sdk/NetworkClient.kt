@@ -105,6 +105,14 @@ class NetworkClient(
                     setRequestProperty("X-MGM-Bundle-Id", it)
                 }
 
+                configuration.wrapperName?.let {
+                    setRequestProperty("X-MGM-Wrapper", it)
+                }
+
+                configuration.wrapperVersion?.let {
+                    setRequestProperty("X-MGM-Wrapper-Version", it)
+                }
+
                 if (isCompressed) {
                     setRequestProperty("Content-Encoding", "gzip")
                 }

@@ -388,6 +388,8 @@ class MostlyGoodMetrics private constructor(
                         .maxStoredEvents(configuration.maxStoredEvents)
                         .enableDebugLogging(configuration.enableDebugLogging)
                         .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
+                        .wrapperName(configuration.wrapperName)
+                        .wrapperVersion(configuration.wrapperVersion)
                         .build()
                 } else {
                     configuration
