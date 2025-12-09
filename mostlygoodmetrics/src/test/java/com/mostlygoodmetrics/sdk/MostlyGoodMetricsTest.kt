@@ -210,6 +210,94 @@ class MostlyGoodMetricsTest {
             timestamp = "2024-01-01T00:00:00.000Z"
         )
     }
+
+    @Test
+    fun `events include $sdk property defaulting to android`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.track("test_event")
+
+        val events = storage.fetchEvents(1)
+        assertEquals(1, events.size)
+        val properties = events[0].properties
+        assertNotNull(properties)
+        val sdkValue = (properties?.get("\$sdk") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals("android", sdkValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `events use wrapperName for $sdk property when set`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .wrapperName("flutter")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.track("test_event")
+
+        val events = storage.fetchEvents(1)
+        assertEquals(1, events.size)
+        val properties = events[0].properties
+        assertNotNull(properties)
+        val sdkValue = (properties?.get("\$sdk") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals("flutter", sdkValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `events include $device_type property`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.track("test_event")
+
+        val events = storage.fetchEvents(1)
+        assertEquals(1, events.size)
+        val properties = events[0].properties
+        assertNotNull(properties)
+        // Device type should be present (value depends on context, will be "phone" without context)
+        assertTrue(properties?.containsKey("\$device_type") == true)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `events include $device_model property`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.track("test_event")
+
+        val events = storage.fetchEvents(1)
+        assertEquals(1, events.size)
+        val properties = events[0].properties
+        assertNotNull(properties)
+        assertTrue(properties?.containsKey("\$device_model") == true)
+
+        sdk.shutdown()
+    }
 }
 
 /**

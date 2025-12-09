@@ -288,7 +288,8 @@ class MostlyGoodMetrics private constructor(
     private fun buildProperties(userProperties: Map<String, Any?>?): Map<String, Any?> {
         val systemProperties = mapOf(
             "\$device_type" to getDeviceType(),
-            "\$device_model" to (Build.MODEL ?: "unknown")
+            "\$device_model" to (Build.MODEL ?: "unknown"),
+            "\$sdk" to (configuration.wrapperName ?: "android")
         )
 
         return if (userProperties != null) {
