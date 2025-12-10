@@ -433,4 +433,112 @@ class MGMEventTest {
         assertEquals(original.osVersion, deserialized.osVersion)
         assertEquals(original.environment, deserialized.environment)
     }
+
+    // MARK: - New Device Properties Tests
+
+    @Test
+    fun `create includes new device properties`() {
+        val event = MGMEvent.create(
+            name = "test_event",
+            appVersion = "1.2.3",
+            appBuildNumber = "42",
+            deviceManufacturer = "Samsung",
+            locale = "en_US",
+            timezone = "America/New_York"
+        )
+
+        assertNotNull(event)
+        assertEquals("1.2.3", event!!.appVersion)
+        assertEquals("42", event.appBuildNumber)
+        assertEquals("Samsung", event.deviceManufacturer)
+        assertEquals("en_US", event.locale)
+        assertEquals("America/New_York", event.timezone)
+    }
+
+    @Test
+    fun `event serializes new device properties with snake_case`() {
+        val event = MGMEvent(
+            name = "test",
+            timestamp = "2024-01-01T00:00:00.000Z",
+            appVersion = "1.2.3",
+            appBuildNumber = "42",
+            deviceManufacturer = "Samsung",
+            locale = "en_US",
+            timezone = "America/New_York"
+        )
+
+        val jsonStr = json.encodeToString(event)
+
+        assertTrue(jsonStr.contains("\"app_version\""))
+        assertTrue(jsonStr.contains("\"app_build_number\""))
+        assertTrue(jsonStr.contains("\"device_manufacturer\""))
+        assertTrue(jsonStr.contains("\"locale\""))
+        assertTrue(jsonStr.contains("\"timezone\""))
+    }
+
+    @Test
+    fun `event deserializes new device properties from JSON`() {
+        val jsonStr = """
+            {
+                "name": "test",
+                "timestamp": "2024-01-01T00:00:00.000Z",
+                "app_version": "1.2.3",
+                "app_build_number": "42",
+                "device_manufacturer": "Samsung",
+                "locale": "en_US",
+                "timezone": "America/New_York"
+            }
+        """.trimIndent()
+
+        val event: MGMEvent = json.decodeFromString(jsonStr)
+
+        assertEquals("1.2.3", event.appVersion)
+        assertEquals("42", event.appBuildNumber)
+        assertEquals("Samsung", event.deviceManufacturer)
+        assertEquals("en_US", event.locale)
+        assertEquals("America/New_York", event.timezone)
+    }
+
+    @Test
+    fun `roundtrip serialization preserves new device properties`() {
+        val original = MGMEvent(
+            name = "roundtrip_test",
+            timestamp = "2024-06-15T10:30:00.000Z",
+            appVersion = "2.0.0",
+            appBuildNumber = "123",
+            deviceManufacturer = "Google",
+            locale = "fr_FR",
+            timezone = "Europe/Paris"
+        )
+
+        val jsonStr = json.encodeToString(original)
+        val deserialized: MGMEvent = json.decodeFromString(jsonStr)
+
+        assertEquals(original.appVersion, deserialized.appVersion)
+        assertEquals(original.appBuildNumber, deserialized.appBuildNumber)
+        assertEquals(original.deviceManufacturer, deserialized.deviceManufacturer)
+        assertEquals(original.locale, deserialized.locale)
+        assertEquals(original.timezone, deserialized.timezone)
+    }
+
+    @Test
+    fun `event context includes new device properties`() {
+        val context = MGMEventContext(
+            platform = "android",
+            appVersion = "1.2.3",
+            appBuildNumber = "42",
+            osVersion = "14",
+            deviceManufacturer = "Samsung",
+            locale = "en_US",
+            timezone = "America/New_York",
+            environment = "production"
+        )
+
+        val jsonStr = json.encodeToString(context)
+
+        assertTrue(jsonStr.contains("\"app_build_number\""))
+        assertTrue(jsonStr.contains("\"device_manufacturer\""))
+        assertTrue(jsonStr.contains("\"locale\""))
+        assertTrue(jsonStr.contains("\"timezone\""))
+    }
 }
