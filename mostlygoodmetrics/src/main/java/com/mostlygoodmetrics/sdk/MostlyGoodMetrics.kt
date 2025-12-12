@@ -125,8 +125,12 @@ class MostlyGoodMetrics private constructor(
             sessionId = sessionId,
             platform = PLATFORM,
             appVersion = getAppVersion(),
+            appBuildNumber = getAppBuildNumber(),
             osVersion = getOsVersion(),
             environment = configuration.environment,
+            deviceManufacturer = getDeviceManufacturer(),
+            locale = getLocale(),
+            timezone = getTimezone(),
             properties = mergedProperties
         )
 
@@ -203,10 +207,14 @@ class MostlyGoodMetrics private constructor(
                 val context = MGMEventContext(
                     platform = PLATFORM,
                     appVersion = getAppVersion(),
+                    appBuildNumber = getAppBuildNumber(),
                     osVersion = getOsVersion(),
                     userId = userId,
                     sessionId = sessionId,
-                    environment = configuration.environment
+                    environment = configuration.environment,
+                    deviceManufacturer = getDeviceManufacturer(),
+                    locale = getLocale(),
+                    timezone = getTimezone()
                 )
 
                 val payload = MGMEventsPayload(events = events, context = context)
@@ -303,14 +311,22 @@ class MostlyGoodMetrics private constructor(
         val ctx = context ?: return "unknown"
         return try {
             val packageInfo = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-            val versionName = packageInfo.versionName ?: "unknown"
-            val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                packageInfo.longVersionCode
+            packageInfo.versionName ?: "unknown"
+        } catch (e: Exception) {
+            "unknown"
+        }
+    }
+
+    private fun getAppBuildNumber(): String {
+        val ctx = context ?: return "unknown"
+        return try {
+            val packageInfo = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode.toString()
             } else {
                 @Suppress("DEPRECATION")
-                packageInfo.versionCode.toLong()
+                packageInfo.versionCode.toString()
             }
-            "$versionName ($versionCode)"
         } catch (e: Exception) {
             "unknown"
         }
@@ -325,6 +341,18 @@ class MostlyGoodMetrics private constructor(
         val metrics = ctx.resources.displayMetrics
         val widthDp = metrics.widthPixels / metrics.density
         return if (widthDp >= 600) "tablet" else "phone"
+    }
+
+    private fun getDeviceManufacturer(): String {
+        return Build.MANUFACTURER ?: "unknown"
+    }
+
+    private fun getLocale(): String {
+        return java.util.Locale.getDefault().toString()
+    }
+
+    private fun getTimezone(): String {
+        return java.util.TimeZone.getDefault().id
     }
 
     /**

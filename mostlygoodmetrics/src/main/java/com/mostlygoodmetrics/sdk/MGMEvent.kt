@@ -26,9 +26,15 @@ data class MGMEvent(
     val platform: String? = null,
     @SerialName("app_version")
     val appVersion: String? = null,
+    @SerialName("app_build_number")
+    val appBuildNumber: String? = null,
     @SerialName("os_version")
     val osVersion: String? = null,
     val environment: String? = null,
+    @SerialName("device_manufacturer")
+    val deviceManufacturer: String? = null,
+    val locale: String? = null,
+    val timezone: String? = null,
     val properties: JsonObject? = null
 ) {
     companion object {
@@ -65,8 +71,12 @@ data class MGMEvent(
             sessionId: String? = null,
             platform: String? = null,
             appVersion: String? = null,
+            appBuildNumber: String? = null,
             osVersion: String? = null,
             environment: String? = null,
+            deviceManufacturer: String? = null,
+            locale: String? = null,
+            timezone: String? = null,
             properties: Map<String, Any?>? = null
         ): MGMEvent? {
             if (!isValidEventName(name)) {
@@ -82,8 +92,12 @@ data class MGMEvent(
                 sessionId = sessionId,
                 platform = platform,
                 appVersion = appVersion,
+                appBuildNumber = appBuildNumber,
                 osVersion = osVersion,
                 environment = environment,
+                deviceManufacturer = deviceManufacturer,
+                locale = locale,
+                timezone = timezone,
                 properties = jsonProperties
             )
         }
@@ -150,11 +164,17 @@ data class MGMEventContext(
     val platform: String? = null,
     @SerialName("app_version")
     val appVersion: String? = null,
+    @SerialName("app_build_number")
+    val appBuildNumber: String? = null,
     @SerialName("os_version")
     val osVersion: String? = null,
     @SerialName("user_id")
     val userId: String? = null,
     @SerialName("session_id")
     val sessionId: String? = null,
-    val environment: String? = null
+    val environment: String? = null,
+    @SerialName("device_manufacturer")
+    val deviceManufacturer: String? = null,
+    val locale: String? = null,
+    val timezone: String? = null
 )
