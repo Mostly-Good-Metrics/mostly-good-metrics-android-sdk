@@ -173,6 +173,90 @@ class MostlyGoodMetrics private constructor(
         MGMLogger.info("New session started: $sessionId")
     }
 
+    // region Super Properties
+
+    /**
+     * Set a single super property that will be included with every event.
+     *
+     * @param key The property key
+     * @param value The property value
+     */
+    fun setSuperProperty(key: String, value: Any?) {
+        val properties = getSuperProperties().toMutableMap()
+        properties[key] = value
+        saveSuperProperties(properties)
+        MGMLogger.debug("Set super property: $key")
+    }
+
+    /**
+     * Set multiple super properties at once.
+     *
+     * @param properties Map of properties to set
+     */
+    fun setSuperProperties(properties: Map<String, Any?>) {
+        val current = getSuperProperties().toMutableMap()
+        current.putAll(properties)
+        saveSuperProperties(current)
+        MGMLogger.debug("Set super properties: ${properties.keys.joinToString(", ")}")
+    }
+
+    /**
+     * Remove a single super property.
+     *
+     * @param key The property key to remove
+     */
+    fun removeSuperProperty(key: String) {
+        val properties = getSuperProperties().toMutableMap()
+        properties.remove(key)
+        saveSuperProperties(properties)
+        MGMLogger.debug("Removed super property: $key")
+    }
+
+    /**
+     * Clear all super properties.
+     */
+    fun clearSuperProperties() {
+        prefs?.edit()?.remove(KEY_SUPER_PROPERTIES)?.apply()
+        MGMLogger.debug("Cleared all super properties")
+    }
+
+    /**
+     * Get all current super properties.
+     *
+     * @return Map of super properties
+     */
+    fun getSuperProperties(): Map<String, Any?> {
+        val json = prefs?.getString(KEY_SUPER_PROPERTIES, null) ?: return emptyMap()
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            org.json.JSONObject(json).toMap()
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to parse super properties: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    private fun saveSuperProperties(properties: Map<String, Any?>) {
+        try {
+            val json = org.json.JSONObject(properties).toString()
+            prefs?.edit()?.putString(KEY_SUPER_PROPERTIES, json)?.apply()
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to save super properties: ${e.message}")
+        }
+    }
+
+    private fun org.json.JSONObject.toMap(): Map<String, Any?> {
+        val map = mutableMapOf<String, Any?>()
+        val keys = this.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            map[key] = this.get(key)
+        }
+        return map
+    }
+
+    // endregion
+
     /**
      * Manually flush pending events to the server.
      *
@@ -300,11 +384,18 @@ class MostlyGoodMetrics private constructor(
             "\$sdk" to (configuration.wrapperName ?: "android")
         )
 
-        return if (userProperties != null) {
-            systemProperties + userProperties
-        } else {
-            systemProperties
+        // Merge properties: super properties < user properties < system properties
+        // User properties override super properties, system properties are always added
+        val superProperties = getSuperProperties()
+        val merged = superProperties.toMutableMap()
+
+        if (userProperties != null) {
+            merged.putAll(userProperties)
         }
+
+        merged.putAll(systemProperties)
+
+        return merged
     }
 
     private fun getAppVersion(): String {
@@ -368,6 +459,7 @@ class MostlyGoodMetrics private constructor(
         private const val PREFS_NAME = "mostly_good_metrics"
         private const val KEY_USER_ID = "user_id"
         private const val KEY_APP_VERSION = "app_version"
+        private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val PLATFORM = "android"
 
         @Volatile
@@ -501,6 +593,59 @@ class MostlyGoodMetrics private constructor(
         @get:JvmName("getCurrentPendingEventCount")
         val pendingEventCount: Int
             get() = instance?.pendingEventCount ?: 0
+
+        // region Super Properties (Static)
+
+        /**
+         * Set a single super property using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("setSuperPropertyStatic")
+        fun setSuperProperty(key: String, value: Any?) {
+            instance?.setSuperProperty(key, value)
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Set multiple super properties using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("setSuperPropertiesStatic")
+        fun setSuperProperties(properties: Map<String, Any?>) {
+            instance?.setSuperProperties(properties)
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Remove a single super property using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("removeSuperPropertyStatic")
+        fun removeSuperProperty(key: String) {
+            instance?.removeSuperProperty(key)
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Clear all super properties using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("clearSuperPropertiesStatic")
+        fun clearSuperProperties() {
+            instance?.clearSuperProperties()
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Get all current super properties from the shared instance.
+         */
+        @JvmStatic
+        @JvmName("getSuperPropertiesStatic")
+        fun getSuperProperties(): Map<String, Any?> {
+            return instance?.getSuperProperties() ?: emptyMap()
+        }
+
+        // endregion
 
         /**
          * Reset the SDK (mainly for testing).
