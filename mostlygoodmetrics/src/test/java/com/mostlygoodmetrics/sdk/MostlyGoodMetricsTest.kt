@@ -26,6 +26,7 @@ class MostlyGoodMetricsTest {
 
         val event = MGMEvent(
             name = "test_event",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z"
         )
         storage.store(event)
@@ -39,6 +40,7 @@ class MostlyGoodMetricsTest {
 
         val event = MGMEvent(
             name = "test_event",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z",
             userId = "user-123",
             sessionId = "session-456",
@@ -207,6 +209,7 @@ class MostlyGoodMetricsTest {
     private fun createTestEvent(name: String): MGMEvent {
         return MGMEvent(
             name = name,
+            clientEventId = java.util.UUID.randomUUID().toString(),
             timestamp = "2024-01-01T00:00:00.000Z"
         )
     }

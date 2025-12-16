@@ -153,6 +153,32 @@ class MGMEventTest {
     }
 
     @Test
+    fun `create generates clientEventId as UUID`() {
+        val event = MGMEvent.create("test")
+        assertNotNull(event)
+
+        // Should be a valid UUID format
+        val clientEventId = event!!.clientEventId
+        assertNotNull(clientEventId)
+        assertTrue(clientEventId.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+    }
+
+    @Test
+    fun `create generates unique clientEventId for each event`() {
+        val event1 = MGMEvent.create("test1")
+        val event2 = MGMEvent.create("test2")
+        val event3 = MGMEvent.create("test3")
+
+        assertNotNull(event1)
+        assertNotNull(event2)
+        assertNotNull(event3)
+
+        // All should be unique
+        val ids = setOf(event1!!.clientEventId, event2!!.clientEventId, event3!!.clientEventId)
+        assertEquals(3, ids.size)
+    }
+
+    @Test
     fun `create includes all metadata`() {
         val event = MGMEvent.create(
             name = "test_event",
@@ -340,6 +366,7 @@ class MGMEventTest {
     fun `event serializes to JSON with snake_case`() {
         val event = MGMEvent(
             name = "test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z",
             userId = "user-1",
             sessionId = "session-1",
@@ -355,6 +382,35 @@ class MGMEventTest {
         assertTrue(jsonStr.contains("\"session_id\""))
         assertTrue(jsonStr.contains("\"app_version\""))
         assertTrue(jsonStr.contains("\"os_version\""))
+        assertTrue(jsonStr.contains("\"client_event_id\""))
+    }
+
+    @Test
+    fun `event serializes clientEventId with snake_case`() {
+        val event = MGMEvent(
+            name = "test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
+            timestamp = "2024-01-01T00:00:00.000Z"
+        )
+
+        val jsonStr = json.encodeToString(event)
+
+        assertTrue(jsonStr.contains("\"client_event_id\":\"550e8400-e29b-41d4-a716-446655440000\""))
+    }
+
+    @Test
+    fun `event deserializes clientEventId from JSON`() {
+        val jsonStr = """
+            {
+                "name": "test",
+                "client_event_id": "550e8400-e29b-41d4-a716-446655440000",
+                "timestamp": "2024-01-01T00:00:00.000Z"
+            }
+        """.trimIndent()
+
+        val event: MGMEvent = json.decodeFromString(jsonStr)
+
+        assertEquals("550e8400-e29b-41d4-a716-446655440000", event.clientEventId)
     }
 
     @Test
@@ -362,6 +418,7 @@ class MGMEventTest {
         val jsonStr = """
             {
                 "name": "test",
+                "client_event_id": "550e8400-e29b-41d4-a716-446655440000",
                 "timestamp": "2024-01-01T00:00:00.000Z",
                 "user_id": "user-1",
                 "session_id": "session-1",
@@ -380,6 +437,7 @@ class MGMEventTest {
     fun `event with null fields serializes correctly`() {
         val event = MGMEvent(
             name = "test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z"
         )
 
@@ -412,6 +470,7 @@ class MGMEventTest {
     fun `roundtrip serialization preserves data`() {
         val original = MGMEvent(
             name = "roundtrip_test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-06-15T10:30:00.000Z",
             userId = "user-abc",
             sessionId = "session-xyz",
@@ -459,6 +518,7 @@ class MGMEventTest {
     fun `event serializes new device properties with snake_case`() {
         val event = MGMEvent(
             name = "test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z",
             appVersion = "1.2.3",
             appBuildNumber = "42",
@@ -481,6 +541,7 @@ class MGMEventTest {
         val jsonStr = """
             {
                 "name": "test",
+                "client_event_id": "550e8400-e29b-41d4-a716-446655440000",
                 "timestamp": "2024-01-01T00:00:00.000Z",
                 "app_version": "1.2.3",
                 "app_build_number": "42",
@@ -503,6 +564,7 @@ class MGMEventTest {
     fun `roundtrip serialization preserves new device properties`() {
         val original = MGMEvent(
             name = "roundtrip_test",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-06-15T10:30:00.000Z",
             appVersion = "2.0.0",
             appBuildNumber = "123",

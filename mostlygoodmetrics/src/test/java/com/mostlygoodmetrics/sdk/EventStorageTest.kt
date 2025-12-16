@@ -334,6 +334,7 @@ class EventStorageTest {
     fun `storage handles events with all fields populated`() {
         val event = MGMEvent(
             name = "full_event",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z",
             userId = "user-123",
             sessionId = "session-456",
@@ -355,6 +356,7 @@ class EventStorageTest {
     fun `storage handles events with minimal fields`() {
         val event = MGMEvent(
             name = "minimal",
+            clientEventId = "550e8400-e29b-41d4-a716-446655440000",
             timestamp = "2024-01-01T00:00:00.000Z"
         )
 
@@ -369,6 +371,7 @@ class EventStorageTest {
     private fun createTestEvent(name: String): MGMEvent {
         return MGMEvent(
             name = name,
+            clientEventId = java.util.UUID.randomUUID().toString(),
             timestamp = "2024-01-01T00:00:00.000Z"
         )
     }

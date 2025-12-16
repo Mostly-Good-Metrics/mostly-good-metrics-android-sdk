@@ -101,6 +101,12 @@ class NetworkClient(
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("User-Agent", buildUserAgent())
 
+                // SDK identification headers for metrics
+                setRequestProperty("X-MGM-SDK", "android")
+                setRequestProperty("X-MGM-SDK-Version", SDK_VERSION)
+                setRequestProperty("X-MGM-Platform", "android")
+                setRequestProperty("X-MGM-Platform-Version", Build.VERSION.RELEASE ?: "unknown")
+
                 configuration.packageName?.let {
                     setRequestProperty("X-MGM-Bundle-Id", it)
                 }

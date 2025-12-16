@@ -11,6 +11,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 /**
  * Represents an analytics event to be tracked.
@@ -18,6 +19,8 @@ import java.util.TimeZone
 @Serializable
 data class MGMEvent(
     val name: String,
+    @SerialName("client_event_id")
+    val clientEventId: String,
     val timestamp: String,
     @SerialName("user_id")
     val userId: String? = null,
@@ -87,6 +90,7 @@ data class MGMEvent(
 
             return MGMEvent(
                 name = name,
+                clientEventId = UUID.randomUUID().toString(),
                 timestamp = iso8601Format.format(Date()),
                 userId = userId,
                 sessionId = sessionId,
