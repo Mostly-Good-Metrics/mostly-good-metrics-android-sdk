@@ -67,7 +67,7 @@ class FlushBehaviorTest {
         // Create storage with events pre-loaded to avoid auto-flush during track()
         val preloadedStorage = InMemoryEventStorage(maxEvents = 100)
         repeat(5) {
-            preloadedStorage.store(MGMEvent(name = "event$it", timestamp = "2024-01-01T00:00:00.000Z"))
+            preloadedStorage.store(MGMEvent(name = "event$it", clientEventId = java.util.UUID.randomUUID().toString(), timestamp = "2024-01-01T00:00:00.000Z"))
         }
 
         val sdk = MostlyGoodMetrics.createForTesting(smallBatchConfig, preloadedStorage, mockNetwork)
@@ -230,7 +230,7 @@ class FlushBehaviorTest {
         // Pre-load storage to avoid auto-flush during track()
         val preloadedStorage = InMemoryEventStorage(maxEvents = 100)
         repeat(4) {
-            preloadedStorage.store(MGMEvent(name = "event$it", timestamp = "2024-01-01T00:00:00.000Z"))
+            preloadedStorage.store(MGMEvent(name = "event$it", clientEventId = java.util.UUID.randomUUID().toString(), timestamp = "2024-01-01T00:00:00.000Z"))
         }
 
         val sdk = MostlyGoodMetrics.createForTesting(smallBatchConfig, preloadedStorage, mockNetwork)
