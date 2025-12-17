@@ -93,6 +93,14 @@ jobs:
             sed -i "s/version = \".*\"/version = \"$NEW\"/" "$FILE"
           fi
 
+      - name: Update SDK version constant in code
+        run: |
+          NEW="${{ steps.version.outputs.new }}"
+          # Android SDK - update SDK_VERSION in NetworkClient.kt
+          if [ -f "mostlygoodmetrics/src/main/java/com/mostlygoodmetrics/sdk/NetworkClient.kt" ]; then
+            sed -i 's/internal const val SDK_VERSION = ".*"/internal const val SDK_VERSION = "'"$NEW"'"/' mostlygoodmetrics/src/main/java/com/mostlygoodmetrics/sdk/NetworkClient.kt
+          fi
+
       - name: Create Pull Request
         id: create-pr
         uses: peter-evans/create-pull-request@v6
