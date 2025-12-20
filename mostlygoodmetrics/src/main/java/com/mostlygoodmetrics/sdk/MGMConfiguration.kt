@@ -36,7 +36,7 @@ class MGMConfiguration private constructor(
 
         /**
          * Set the base URL for the API endpoint.
-         * Default: https://mostlygoodmetrics.com
+         * Default: https://ingest.mostlygoodmetrics.com
          */
         fun baseUrl(url: String) = apply { this.baseUrl = url }
 
@@ -137,7 +137,7 @@ class MGMConfiguration private constructor(
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://mostlygoodmetrics.com"
+        const val DEFAULT_BASE_URL = "https://ingest.mostlygoodmetrics.com"
         const val DEFAULT_ENVIRONMENT = "production"
         const val DEFAULT_MAX_BATCH_SIZE = 100
         const val DEFAULT_FLUSH_INTERVAL_SECONDS = 30L
