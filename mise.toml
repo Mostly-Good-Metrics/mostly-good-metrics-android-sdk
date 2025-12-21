@@ -1,2 +1,3 @@
 [tools]
 java = "temurin-17"
+ruby = "3.1"
