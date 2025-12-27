@@ -66,6 +66,19 @@ class MostlyGoodMetrics private constructor(
         private set
 
     /**
+     * Anonymous user ID. Auto-generated and persisted across app launches.
+     * Format: $anon_xxxxxxxxxxxx (12 random alphanumeric chars)
+     */
+    var anonymousId: String = ""
+        private set
+
+    /**
+     * The effective user ID to use in events (identified user or anonymous).
+     */
+    private val effectiveUserId: String
+        get() = userId ?: anonymousId
+
+    /**
      * Current session identifier. Generated per app launch.
      */
     var sessionId: String = UUID.randomUUID().toString()
@@ -89,6 +102,13 @@ class MostlyGoodMetrics private constructor(
 
         // Restore user ID
         userId = prefs?.getString(KEY_USER_ID, null)
+
+        // Restore or generate anonymous ID
+        anonymousId = prefs?.getString(KEY_ANONYMOUS_ID, null) ?: run {
+            val newId = generateAnonymousId()
+            prefs?.edit()?.putString(KEY_ANONYMOUS_ID, newId)?.apply()
+            newId
+        }
 
         // Start flush timer
         startFlushTimer()
@@ -121,7 +141,7 @@ class MostlyGoodMetrics private constructor(
 
         val event = MGMEvent.create(
             name = name,
-            userId = userId,
+            userId = effectiveUserId,
             sessionId = sessionId,
             platform = PLATFORM,
             appVersion = getAppVersion(),
@@ -293,7 +313,7 @@ class MostlyGoodMetrics private constructor(
                     appVersion = getAppVersion(),
                     appBuildNumber = getAppBuildNumber(),
                     osVersion = getOsVersion(),
-                    userId = userId,
+                    userId = effectiveUserId,
                     sessionId = sessionId,
                     environment = configuration.environment,
                     deviceManufacturer = getDeviceManufacturer(),
@@ -458,9 +478,28 @@ class MostlyGoodMetrics private constructor(
     companion object {
         private const val PREFS_NAME = "mostly_good_metrics"
         private const val KEY_USER_ID = "user_id"
+        private const val KEY_ANONYMOUS_ID = "anonymous_id"
         private const val KEY_APP_VERSION = "app_version"
         private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val PLATFORM = "android"
+
+        /**
+         * Generate a random alphanumeric string of the given length.
+         */
+        private fun generateRandomString(length: Int): String {
+            val chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+            return (1..length)
+                .map { chars.random() }
+                .joinToString("")
+        }
+
+        /**
+         * Generate an anonymous user ID with $anon_ prefix.
+         * Format: $anon_xxxxxxxxxxxx (12 random alphanumeric chars)
+         */
+        private fun generateAnonymousId(): String {
+            return "\$anon_${generateRandomString(12)}"
+        }
 
         @Volatile
         private var instance: MostlyGoodMetrics? = null
@@ -585,6 +624,14 @@ class MostlyGoodMetrics private constructor(
         @get:JvmName("getCurrentSessionId")
         val sessionId: String?
             get() = instance?.sessionId
+
+        /**
+         * Get the current anonymous ID from the shared instance.
+         */
+        @JvmStatic
+        @get:JvmName("getCurrentAnonymousId")
+        val anonymousId: String?
+            get() = instance?.anonymousId
 
         /**
          * Get the pending event count from the shared instance.
