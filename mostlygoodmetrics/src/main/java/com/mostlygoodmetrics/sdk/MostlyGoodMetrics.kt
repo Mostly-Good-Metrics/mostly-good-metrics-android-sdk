@@ -166,22 +166,88 @@ class MostlyGoodMetrics private constructor(
     }
 
     /**
-     * Identify a user.
+     * Identify a user with optional profile data.
+     * Profile data (email, name) is sent to the backend via the $identify event.
+     * Debouncing: only sends $identify if payload changed or >24h since last send.
      *
      * @param userId Unique identifier for the user. Persisted across app launches.
+     * @param profile Optional profile data (email, name)
      */
-    fun identify(userId: String) {
+    @JvmOverloads
+    fun identify(userId: String, profile: UserProfile? = null) {
         this.userId = userId
         prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
         MGMLogger.info("User identified: $userId")
+
+        // If profile data is provided, check if we should send $identify event
+        if (profile != null && (profile.email != null || profile.name != null)) {
+            sendIdentifyEventIfNeeded(userId, profile)
+        }
     }
 
     /**
-     * Reset the user identity. Clears the persisted user ID.
+     * Send $identify event if debounce conditions are met.
+     * Only sends if: hash changed OR more than 24 hours since last send.
+     */
+    private fun sendIdentifyEventIfNeeded(userId: String, profile: UserProfile) {
+        val currentHash = computeIdentifyHash(userId, profile)
+        val storedHash = prefs?.getString(KEY_IDENTIFY_HASH, null)
+        val lastSentAt = prefs?.getLong(KEY_IDENTIFY_TIMESTAMP, 0L) ?: 0L
+        val now = System.currentTimeMillis()
+
+        val hashChanged = storedHash != currentHash
+        val expiredTime = lastSentAt == 0L || (now - lastSentAt) > TWENTY_FOUR_HOURS_MS
+
+        if (hashChanged || expiredTime) {
+            MGMLogger.debug("Sending \$identify event (hashChanged=$hashChanged, expiredTime=$expiredTime)")
+
+            // Build properties with only defined values
+            val properties = mutableMapOf<String, Any?>()
+            profile.email?.let { properties["email"] = it }
+            profile.name?.let { properties["name"] = it }
+
+            // Track the $identify event
+            track("\$identify", properties)
+
+            // Update stored hash and timestamp
+            prefs?.edit()
+                ?.putString(KEY_IDENTIFY_HASH, currentHash)
+                ?.putLong(KEY_IDENTIFY_TIMESTAMP, now)
+                ?.apply()
+        } else {
+            MGMLogger.debug("Skipping \$identify event (debounced)")
+        }
+    }
+
+    /**
+     * Compute a simple hash for debouncing identify calls.
+     */
+    private fun computeIdentifyHash(userId: String, profile: UserProfile): String {
+        val payload = "$userId|${profile.email ?: ""}|${profile.name ?: ""}"
+        var hash = 0
+        for (char in payload) {
+            hash = ((hash shl 5) - hash) + char.code
+        }
+        return hash.toString(16)
+    }
+
+    /**
+     * Clear identify debounce state.
+     */
+    private fun clearIdentifyState() {
+        prefs?.edit()
+            ?.remove(KEY_IDENTIFY_HASH)
+            ?.remove(KEY_IDENTIFY_TIMESTAMP)
+            ?.apply()
+    }
+
+    /**
+     * Reset the user identity. Clears the persisted user ID and identify debounce state.
      */
     fun resetIdentity() {
         userId = null
         prefs?.edit()?.remove(KEY_USER_ID)?.apply()
+        clearIdentifyState()
         MGMLogger.info("User identity reset")
     }
 
@@ -481,7 +547,10 @@ class MostlyGoodMetrics private constructor(
         private const val KEY_ANONYMOUS_ID = "anonymous_id"
         private const val KEY_APP_VERSION = "app_version"
         private const val KEY_SUPER_PROPERTIES = "super_properties"
+        private const val KEY_IDENTIFY_HASH = "identify_hash"
+        private const val KEY_IDENTIFY_TIMESTAMP = "identify_timestamp"
         private const val PLATFORM = "android"
+        private const val TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000L
 
         /**
          * Generate a random alphanumeric string of the given length.
@@ -570,12 +639,18 @@ class MostlyGoodMetrics private constructor(
         }
 
         /**
-         * Identify a user using the shared instance.
+         * Identify a user using the shared instance with optional profile data.
+         * Profile data (email, name) is sent to the backend via the $identify event.
+         * Debouncing: only sends $identify if payload changed or >24h since last send.
+         *
+         * @param userId Unique identifier for the user
+         * @param profile Optional profile data (email, name)
          */
         @JvmStatic
+        @JvmOverloads
         @JvmName("identifyUser")
-        fun identify(userId: String) {
-            instance?.identify(userId)
+        fun identify(userId: String, profile: UserProfile? = null) {
+            instance?.identify(userId, profile)
                 ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
         }
 
@@ -724,3 +799,14 @@ class MostlyGoodMetrics private constructor(
         }
     }
 }
+
+/**
+ * User profile data for the identify() call.
+ *
+ * @property email The user's email address
+ * @property name The user's display name
+ */
+data class UserProfile(
+    val email: String? = null,
+    val name: String? = null
+)

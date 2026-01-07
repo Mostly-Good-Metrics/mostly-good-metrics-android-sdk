@@ -301,6 +301,205 @@ class MostlyGoodMetricsTest {
 
         sdk.shutdown()
     }
+
+    @Test
+    fun `identify with email sends $identify event with email property`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123", UserProfile(email = "test@example.com"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNotNull("Expected \$identify event to be tracked", identifyEvent)
+
+        val properties = identifyEvent!!.properties
+        assertNotNull(properties)
+        val emailValue = (properties?.get("email") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals("test@example.com", emailValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `identify with name sends $identify event with name property`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123", UserProfile(name = "John Doe"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNotNull("Expected \$identify event to be tracked", identifyEvent)
+
+        val properties = identifyEvent!!.properties
+        assertNotNull(properties)
+        val nameValue = (properties?.get("name") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals("John Doe", nameValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `identify with email and name sends $identify event with both properties`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123", UserProfile(email = "test@example.com", name = "John Doe"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNotNull("Expected \$identify event to be tracked", identifyEvent)
+
+        val properties = identifyEvent!!.properties
+        assertNotNull(properties)
+        val emailValue = (properties?.get("email") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        val nameValue = (properties?.get("name") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals("test@example.com", emailValue)
+        assertEquals("John Doe", nameValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `identify without profile does not send $identify event`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123")
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNull("Expected no \$identify event when profile is not provided", identifyEvent)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `identify with empty profile does not send $identify event`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123", UserProfile())
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNull("Expected no \$identify event when profile has no email or name", identifyEvent)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `$identify event includes userId`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-456", UserProfile(email = "test@example.com"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNotNull(identifyEvent)
+        assertEquals("user-456", identifyEvent!!.userId)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `identify sets userId even without profile`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-789")
+        sdk.track("test_event")
+
+        val events = storage.fetchEvents(10)
+        val testEvent = events.find { it.name == "test_event" }
+        assertNotNull(testEvent)
+        assertEquals("user-789", testEvent!!.userId)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `debouncing sends $identify on first call (no prefs in unit tests)`() {
+        // Note: In unit tests, SharedPreferences is null, so debouncing state isn't persisted.
+        // This means every identify call with profile data will send $identify.
+        // Full debouncing tests require instrumented tests with real SharedPreferences.
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        // First call should send $identify
+        sdk.identify("user-123", UserProfile(email = "test@example.com"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvents = events.filter { it.name == "\$identify" }
+        assertEquals(1, identifyEvents.size)
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `multiple identify calls send multiple $identify events (no debouncing without prefs)`() {
+        // Note: Without SharedPreferences, debouncing doesn't work.
+        // This test verifies the behavior when prefs is null.
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        sdk.identify("user-123", UserProfile(email = "test@example.com"))
+        sdk.identify("user-123", UserProfile(email = "test@example.com"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvents = events.filter { it.name == "\$identify" }
+        // Without prefs, both calls send events (debouncing requires persistence)
+        assertEquals(2, identifyEvents.size)
+
+        sdk.shutdown()
+    }
 }
 
 /**
