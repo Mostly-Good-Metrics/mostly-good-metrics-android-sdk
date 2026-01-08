@@ -12,7 +12,7 @@ import java.net.URL
 import java.util.zip.GZIPOutputStream
 
 /** SDK version for User-Agent header */
-internal const val SDK_VERSION = "0.2.4"
+internal const val SDK_VERSION = "0.2.5"
 
 /**
  * Result of a network send operation.
