@@ -65,7 +65,7 @@ publishing {
         register<MavenPublication>("release") {
             groupId = "com.mostlygoodmetrics"
             artifactId = "sdk"
-            version = "0.2.5"
+            version = "0.2.6"
 
             afterEvaluate {
                 from(components["release"])
