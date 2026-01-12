@@ -35,6 +35,29 @@ sealed class SendResult {
 }
 
 /**
+ * Result of fetching experiments.
+ */
+sealed class ExperimentsResult {
+    /**
+     * Successfully fetched experiments.
+     */
+    data class Success(val experiments: List<Experiment>) : ExperimentsResult()
+
+    /**
+     * Failed to fetch experiments.
+     */
+    data class Failure(val error: MGMError) : ExperimentsResult()
+}
+
+/**
+ * Represents an A/B test experiment.
+ */
+data class Experiment(
+    val id: String,
+    val variants: List<String>
+)
+
+/**
  * Interface for network operations.
  */
 interface NetworkClientInterface {
@@ -42,6 +65,11 @@ interface NetworkClientInterface {
      * Send events to the API.
      */
     suspend fun sendEvents(payload: MGMEventsPayload): SendResult
+
+    /**
+     * Fetch active experiments from the API.
+     */
+    suspend fun fetchExperiments(): ExperimentsResult
 }
 
 /**
@@ -203,5 +231,98 @@ class NetworkClient(
     private fun buildUserAgent(): String {
         val osVersion = Build.VERSION.RELEASE ?: "unknown"
         return "MostlyGoodMetrics/$SDK_VERSION (Android; OS $osVersion)"
+    }
+
+    /**
+     * Fetch active experiments from the API.
+     */
+    override suspend fun fetchExperiments(): ExperimentsResult = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val url = URL("${configuration.baseUrl}/v1/experiments")
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+
+                setRequestProperty("X-MGM-Key", configuration.apiKey)
+                setRequestProperty("User-Agent", buildUserAgent())
+                setRequestProperty("Accept", "application/json")
+
+                // SDK identification headers
+                setRequestProperty("X-MGM-SDK", "android")
+                setRequestProperty("X-MGM-SDK-Version", SDK_VERSION)
+
+                configuration.packageName?.let {
+                    setRequestProperty("X-MGM-Bundle-Id", it)
+                }
+            }
+
+            MGMLogger.debug("Fetching experiments from ${configuration.baseUrl}/v1/experiments")
+
+            val statusCode = connection.responseCode
+            val body = try {
+                if (statusCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+            } catch (e: Exception) {
+                ""
+            }
+
+            MGMLogger.debug("Experiments response: $statusCode - $body")
+
+            when (statusCode) {
+                200 -> {
+                    try {
+                        val experiments = parseExperimentsResponse(body)
+                        MGMLogger.debug("Fetched ${experiments.size} experiments")
+                        ExperimentsResult.Success(experiments)
+                    } catch (e: Exception) {
+                        MGMLogger.error("Failed to parse experiments response", e)
+                        ExperimentsResult.Failure(MGMError.EncodingError(e))
+                    }
+                }
+                401 -> {
+                    MGMLogger.warn("Unauthorized - invalid API key")
+                    ExperimentsResult.Failure(MGMError.Unauthorized)
+                }
+                else -> {
+                    MGMLogger.warn("Failed to fetch experiments: $statusCode")
+                    ExperimentsResult.Failure(MGMError.UnexpectedStatusCode(statusCode))
+                }
+            }
+        } catch (e: IOException) {
+            MGMLogger.error("Network error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.NetworkError(e))
+        } catch (e: Exception) {
+            MGMLogger.error("Error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.EncodingError(e))
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * Parse the experiments JSON response.
+     * Expected format: { "experiments": [{ "id": "...", "variants": ["a", "b"] }] }
+     */
+    private fun parseExperimentsResponse(jsonString: String): List<Experiment> {
+        val jsonObject = org.json.JSONObject(jsonString)
+        val experimentsArray = jsonObject.optJSONArray("experiments") ?: return emptyList()
+
+        val experiments = mutableListOf<Experiment>()
+        for (i in 0 until experimentsArray.length()) {
+            val expObj = experimentsArray.getJSONObject(i)
+            val id = expObj.getString("id")
+            val variantsArray = expObj.getJSONArray("variants")
+            val variants = mutableListOf<String>()
+            for (j in 0 until variantsArray.length()) {
+                variants.add(variantsArray.getString(j))
+            }
+            experiments.add(Experiment(id = id, variants = variants))
+        }
+        return experiments
     }
 }

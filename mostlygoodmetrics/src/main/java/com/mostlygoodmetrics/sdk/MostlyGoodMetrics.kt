@@ -60,6 +60,12 @@ class MostlyGoodMetrics private constructor(
     private val isFlushing = AtomicBoolean(false)
 
     /**
+     * Cached experiments from the server.
+     */
+    private var experimentsCache: List<Experiment> = emptyList()
+    private val experimentsLoaded = AtomicBoolean(false)
+
+    /**
      * Current user identifier. Persisted across app launches.
      */
     var userId: String? = null
@@ -121,6 +127,29 @@ class MostlyGoodMetrics private constructor(
         // Track install/update (only when context is available)
         if (context != null) {
             trackInstallOrUpdate()
+        }
+
+        // Fetch experiments asynchronously
+        fetchExperimentsAsync()
+    }
+
+    /**
+     * Fetch experiments from the server asynchronously.
+     */
+    private fun fetchExperimentsAsync() {
+        scope.launch {
+            val result = networkClient.fetchExperiments()
+            when (result) {
+                is ExperimentsResult.Success -> {
+                    experimentsCache = result.experiments
+                    experimentsLoaded.set(true)
+                    MGMLogger.debug("Loaded ${result.experiments.size} experiments")
+                }
+                is ExperimentsResult.Failure -> {
+                    experimentsLoaded.set(true)
+                    MGMLogger.debug("Failed to load experiments: ${result.error.message}")
+                }
+            }
         }
     }
 
@@ -339,6 +368,75 @@ class MostlyGoodMetrics private constructor(
             map[key] = this.get(key)
         }
         return map
+    }
+
+    // endregion
+
+    // region A/B Testing
+
+    /**
+     * Get the variant for an A/B test experiment.
+     *
+     * The variant assignment is deterministic based on the user ID and experiment name,
+     * so the same user always gets the same variant for a given experiment.
+     *
+     * The variant is automatically stored as a super property (experiment_{name})
+     * and will be included with all subsequent events.
+     *
+     * @param experimentName The name/ID of the experiment
+     * @return The assigned variant string (e.g., "a", "b"), or null if experiment not found
+     */
+    fun getVariant(experimentName: String): String? {
+        // Check if we already have a stored variant for this experiment
+        val propertyKey = "experiment_${toSnakeCase(experimentName)}"
+        val storedVariant = getSuperProperties()[propertyKey] as? String
+        if (storedVariant != null) {
+            return storedVariant
+        }
+
+        // Find the experiment in cache
+        val experiment = experimentsCache.find { it.id == experimentName }
+
+        // If experiment not found in cache, use hash-based fallback with default variants
+        val variants = experiment?.variants ?: listOf("a", "b")
+
+        // Deterministic assignment based on user ID and experiment name
+        val variant = assignVariant(effectiveUserId, experimentName, variants)
+
+        // Store as super property so it's attached to all events
+        setSuperProperty(propertyKey, variant)
+
+        MGMLogger.debug("Assigned variant '$variant' for experiment '$experimentName'")
+
+        return variant
+    }
+
+    /**
+     * Deterministically assign a variant based on user ID and experiment name.
+     * Uses a simple hash to ensure the same user always gets the same variant.
+     */
+    private fun assignVariant(userId: String, experimentName: String, variants: List<String>): String {
+        if (variants.isEmpty()) return "a"
+
+        val hashInput = "$userId|$experimentName"
+        var hash = 0
+        for (char in hashInput) {
+            hash = ((hash shl 5) - hash) + char.code
+        }
+
+        // Use absolute value and modulo to pick variant
+        val index = kotlin.math.abs(hash) % variants.size
+        return variants[index]
+    }
+
+    /**
+     * Convert a string to snake_case.
+     */
+    private fun toSnakeCase(input: String): String {
+        return input
+            .replace(Regex("([a-z])([A-Z])")) { "${it.groupValues[1]}_${it.groupValues[2]}" }
+            .replace(Regex("[^a-zA-Z0-9]"), "_")
+            .lowercase()
     }
 
     // endregion
@@ -765,6 +863,29 @@ class MostlyGoodMetrics private constructor(
         @JvmName("getSuperPropertiesStatic")
         fun getSuperProperties(): Map<String, Any?> {
             return instance?.getSuperProperties() ?: emptyMap()
+        }
+
+        // endregion
+
+        // region A/B Testing (Static)
+
+        /**
+         * Get the variant for an A/B test experiment using the shared instance.
+         *
+         * The variant assignment is deterministic based on the user ID and experiment name,
+         * so the same user always gets the same variant for a given experiment.
+         *
+         * @param experimentName The name/ID of the experiment
+         * @return The assigned variant string (e.g., "a", "b"), or null if not configured
+         */
+        @JvmStatic
+        @JvmName("getVariantStatic")
+        fun getVariant(experimentName: String): String? {
+            return instance?.getVariant(experimentName)
+                ?: run {
+                    MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+                    null
+                }
         }
 
         // endregion
