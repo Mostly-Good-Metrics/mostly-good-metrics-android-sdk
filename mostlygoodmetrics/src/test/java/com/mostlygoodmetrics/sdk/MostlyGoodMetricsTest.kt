@@ -122,12 +122,14 @@ class MostlyGoodMetricsTest {
         assertNotNull(MGMEvent.create("ValidEvent"))
         assertNotNull(MGMEvent.create("event123"))
         assertNotNull(MGMEvent.create("\$app_opened"))
+        assertNotNull(MGMEvent.create("valid name"))  // Spaces are allowed in event names
 
         // Invalid names should return null
         assertNull(MGMEvent.create(""))
         assertNull(MGMEvent.create("123invalid"))
         assertNull(MGMEvent.create("invalid-name"))
-        assertNull(MGMEvent.create("invalid name"))
+        assertNull(MGMEvent.create(" leading_space"))  // Leading space is invalid
+        assertNull(MGMEvent.create("trailing_space "))  // Trailing space is invalid
     }
 
     @Test
