@@ -35,6 +35,31 @@ sealed class SendResult {
 }
 
 /**
+ * Response from the experiments API endpoint.
+ * Contains the server-assigned variants for the user.
+ */
+@kotlinx.serialization.Serializable
+data class ExperimentsResponse(
+    @kotlinx.serialization.SerialName("assigned_variants")
+    val assignedVariants: Map<String, String> = emptyMap()
+)
+
+/**
+ * Result of fetching experiments.
+ */
+sealed class ExperimentsResult {
+    /**
+     * Successfully fetched experiments.
+     */
+    data class Success(val response: ExperimentsResponse) : ExperimentsResult()
+
+    /**
+     * Failed to fetch experiments.
+     */
+    data class Failure(val error: MGMError) : ExperimentsResult()
+}
+
+/**
  * Interface for network operations.
  */
 interface NetworkClientInterface {
@@ -42,6 +67,11 @@ interface NetworkClientInterface {
      * Send events to the API.
      */
     suspend fun sendEvents(payload: MGMEventsPayload): SendResult
+
+    /**
+     * Fetch experiments for a user.
+     */
+    suspend fun fetchExperiments(userId: String): ExperimentsResult
 }
 
 /**
@@ -203,5 +233,91 @@ class NetworkClient(
     private fun buildUserAgent(): String {
         val osVersion = Build.VERSION.RELEASE ?: "unknown"
         return "MostlyGoodMetrics/$SDK_VERSION (Android; OS $osVersion)"
+    }
+
+    /**
+     * Fetch experiments for a user.
+     */
+    override suspend fun fetchExperiments(userId: String): ExperimentsResult = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val encodedUserId = java.net.URLEncoder.encode(userId, "UTF-8")
+            val url = URL("${configuration.baseUrl}/v1/experiments?user_id=$encodedUserId")
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+
+                setRequestProperty("X-MGM-Key", configuration.apiKey)
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", buildUserAgent())
+
+                // SDK identification headers for metrics
+                setRequestProperty("X-MGM-SDK", "android")
+                setRequestProperty("X-MGM-SDK-Version", SDK_VERSION)
+                setRequestProperty("X-MGM-Platform", "android")
+                setRequestProperty("X-MGM-Platform-Version", Build.VERSION.RELEASE ?: "unknown")
+
+                configuration.packageName?.let {
+                    setRequestProperty("X-MGM-Bundle-Id", it)
+                }
+
+                configuration.wrapperName?.let {
+                    setRequestProperty("X-MGM-Wrapper", it)
+                }
+
+                configuration.wrapperVersion?.let {
+                    setRequestProperty("X-MGM-Wrapper-Version", it)
+                }
+            }
+
+            MGMLogger.debug("Fetching experiments for user: $userId")
+
+            val statusCode = connection.responseCode
+            val body = try {
+                if (statusCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+            } catch (e: Exception) {
+                ""
+            }
+
+            MGMLogger.debug("Experiments response: $statusCode - $body")
+
+            when (statusCode) {
+                200 -> {
+                    try {
+                        val response = json.decodeFromString<ExperimentsResponse>(body)
+                        MGMLogger.debug("Loaded ${response.assignedVariants.size} assigned variants")
+                        ExperimentsResult.Success(response)
+                    } catch (e: Exception) {
+                        MGMLogger.warn("Failed to parse experiments response: ${e.message}")
+                        ExperimentsResult.Failure(MGMError.EncodingError(e))
+                    }
+                }
+                401 -> {
+                    MGMLogger.warn("Unauthorized fetching experiments")
+                    ExperimentsResult.Failure(MGMError.Unauthorized)
+                }
+                403 -> {
+                    MGMLogger.warn("Forbidden fetching experiments: $body")
+                    ExperimentsResult.Failure(MGMError.Forbidden(body))
+                }
+                else -> {
+                    MGMLogger.warn("Failed to fetch experiments: $statusCode - $body")
+                    ExperimentsResult.Failure(MGMError.ServerError(statusCode, body))
+                }
+            }
+        } catch (e: IOException) {
+            MGMLogger.error("Network error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.NetworkError(e))
+        } catch (e: Exception) {
+            MGMLogger.error("Error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.EncodingError(e))
+        } finally {
+            connection?.disconnect()
+        }
     }
 }

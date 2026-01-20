@@ -314,14 +314,25 @@ class FlushBehaviorTest {
  * Mock network client that always returns the same result.
  */
 class MockNetworkClient(
-    private val result: SendResult
+    private val result: SendResult,
+    var experimentsResult: ExperimentsResult = ExperimentsResult.Success(ExperimentsResponse())
 ) : NetworkClientInterface {
     var sendCount = 0
+        private set
+    var fetchExperimentsCount = 0
+        private set
+    var lastFetchedUserId: String? = null
         private set
 
     override suspend fun sendEvents(payload: MGMEventsPayload): SendResult {
         sendCount++
         return result
+    }
+
+    override suspend fun fetchExperiments(userId: String): ExperimentsResult {
+        fetchExperimentsCount++
+        lastFetchedUserId = userId
+        return experimentsResult
     }
 }
 
@@ -329,7 +340,8 @@ class MockNetworkClient(
  * Mock network client that returns results in sequence.
  */
 class SequentialMockNetworkClient(
-    private val results: List<SendResult>
+    private val results: List<SendResult>,
+    private val experimentsResult: ExperimentsResult = ExperimentsResult.Success(ExperimentsResponse())
 ) : NetworkClientInterface {
     private var callIndex = 0
 
@@ -337,5 +349,9 @@ class SequentialMockNetworkClient(
         val result = results.getOrElse(callIndex) { results.last() }
         callIndex++
         return result
+    }
+
+    override suspend fun fetchExperiments(userId: String): ExperimentsResult {
+        return experimentsResult
     }
 }
