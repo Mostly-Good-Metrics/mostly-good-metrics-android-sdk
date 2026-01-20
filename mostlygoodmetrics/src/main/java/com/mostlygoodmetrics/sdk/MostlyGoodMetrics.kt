@@ -66,6 +66,9 @@ class MostlyGoodMetrics private constructor(
     private var experimentsLoaded = false
     private val experimentsReadyCallbacks: MutableList<() -> Unit> = mutableListOf()
 
+    // In-memory super properties (used when prefs is null)
+    private val inMemorySuperProperties: MutableMap<String, Any?> = mutableMapOf()
+
     /**
      * Current user identifier. Persisted across app launches.
      */
@@ -324,7 +327,11 @@ class MostlyGoodMetrics private constructor(
      * Clear all super properties.
      */
     fun clearSuperProperties() {
-        prefs?.edit()?.remove(KEY_SUPER_PROPERTIES)?.apply()
+        if (prefs != null) {
+            prefs.edit()?.remove(KEY_SUPER_PROPERTIES)?.apply()
+        } else {
+            inMemorySuperProperties.clear()
+        }
         MGMLogger.debug("Cleared all super properties")
     }
 
@@ -334,7 +341,10 @@ class MostlyGoodMetrics private constructor(
      * @return Map of super properties
      */
     fun getSuperProperties(): Map<String, Any?> {
-        val json = prefs?.getString(KEY_SUPER_PROPERTIES, null) ?: return emptyMap()
+        if (prefs == null) {
+            return inMemorySuperProperties.toMap()
+        }
+        val json = prefs.getString(KEY_SUPER_PROPERTIES, null) ?: return emptyMap()
         return try {
             @Suppress("UNCHECKED_CAST")
             org.json.JSONObject(json).toMap()
@@ -345,9 +355,14 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun saveSuperProperties(properties: Map<String, Any?>) {
+        if (prefs == null) {
+            inMemorySuperProperties.clear()
+            inMemorySuperProperties.putAll(properties)
+            return
+        }
         try {
             val json = org.json.JSONObject(properties).toString()
-            prefs?.edit()?.putString(KEY_SUPER_PROPERTIES, json)?.apply()
+            prefs.edit()?.putString(KEY_SUPER_PROPERTIES, json)?.apply()
         } catch (e: Exception) {
             MGMLogger.warn("Failed to save super properties: ${e.message}")
         }
@@ -781,10 +796,12 @@ class MostlyGoodMetrics private constructor(
      */
     private fun toSnakeCase(str: String): String {
         return str
-            .replace(Regex("([A-Z])")) { "_${it.value}" }
-            .replace(Regex("[-\\s]+"), "_")
-            .lowercase()
-            .removePrefix("_")
+            .replace(Regex("([A-Z])")) { "_${it.value}" }  // Add underscore before uppercase
+            .replace(Regex("[-\\s]+"), "_")                 // Replace dashes and spaces with underscore
+            .lowercase()                                     // Convert to lowercase
+            .replace(Regex("_+"), "_")                       // Collapse multiple underscores
+            .removePrefix("_")                               // Remove leading underscore
+            .removeSuffix("_")                               // Remove trailing underscore
     }
 
     // endregion
