@@ -16,6 +16,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /**
  * MostlyGoodMetrics SDK for Android.
@@ -58,6 +60,11 @@ class MostlyGoodMetrics private constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var flushJob: Job? = null
     private val isFlushing = AtomicBoolean(false)
+
+    // A/B Testing state
+    private val assignedVariants: MutableMap<String, String> = mutableMapOf()
+    private var experimentsLoaded = false
+    private val experimentsReadyCallbacks: MutableList<() -> Unit> = mutableListOf()
 
     /**
      * Current user identifier. Persisted across app launches.
@@ -122,6 +129,9 @@ class MostlyGoodMetrics private constructor(
         if (context != null) {
             trackInstallOrUpdate()
         }
+
+        // Fetch experiments in background
+        fetchExperimentsInBackground()
     }
 
     /**
@@ -170,11 +180,15 @@ class MostlyGoodMetrics private constructor(
      * Profile data (email, name) is sent to the backend via the $identify event.
      * Debouncing: only sends $identify if payload changed or >24h since last send.
      *
+     * This also invalidates the experiment variants cache and refetches experiments
+     * with the new user ID to handle the "identified wins" aliasing strategy.
+     *
      * @param userId Unique identifier for the user. Persisted across app launches.
      * @param profile Optional profile data (email, name)
      */
     @JvmOverloads
     fun identify(userId: String, profile: UserProfile? = null) {
+        val previousUserId = this.userId ?: anonymousId
         this.userId = userId
         prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
         MGMLogger.info("User identified: $userId")
@@ -182,6 +196,14 @@ class MostlyGoodMetrics private constructor(
         // If profile data is provided, check if we should send $identify event
         if (profile != null && (profile.email != null || profile.name != null)) {
             sendIdentifyEventIfNeeded(userId, profile)
+        }
+
+        // If user ID changed, invalidate experiment cache and refetch
+        // This handles the "identified wins" aliasing strategy on the server
+        if (previousUserId != userId) {
+            MGMLogger.debug("User identity changed, refetching experiments")
+            invalidateExperimentsCache()
+            fetchExperimentsInBackground()
         }
     }
 
@@ -541,6 +563,229 @@ class MostlyGoodMetrics private constructor(
         scope.cancel()
     }
 
+    // region A/B Testing
+
+    /**
+     * Get the variant for an experiment.
+     * Returns the assigned variant ('a', 'b', etc.) or null if experiment not found.
+     *
+     * Variants are assigned server-side and cached locally. The server ensures
+     * the same user always gets the same variant for the same experiment.
+     *
+     * The variant is automatically stored as a super property ($experiment_{name}: 'variant')
+     * so it's attached to all subsequent events.
+     *
+     * @param experimentName The name of the experiment
+     * @return The assigned variant, or null if not found or not loaded
+     */
+    fun getVariant(experimentName: String): String? {
+        if (experimentName.isBlank()) {
+            MGMLogger.warn("getVariant called with empty experimentName")
+            return null
+        }
+
+        // Check if we have a server-assigned variant for this experiment
+        val variant = assignedVariants[experimentName]
+
+        if (variant != null) {
+            // Store as super property so it's attached to all events
+            val propertyName = "\$experiment_${toSnakeCase(experimentName)}"
+            setSuperProperty(propertyName, variant)
+
+            MGMLogger.debug("Using server-assigned variant '$variant' for experiment '$experimentName'")
+            return variant
+        }
+
+        // No assigned variant - check if experiments have been loaded
+        if (!experimentsLoaded) {
+            MGMLogger.debug("Experiments not loaded yet, cannot get variant for: $experimentName")
+            return null
+        }
+
+        // Experiments loaded but no assignment for this experiment
+        MGMLogger.debug("No variant assigned for experiment: $experimentName")
+        return null
+    }
+
+    /**
+     * Returns a suspend function that completes when experiments have been loaded.
+     * Useful for waiting before calling getVariant() to ensure server-side experiments are available.
+     */
+    suspend fun ready() {
+        if (experimentsLoaded) return
+        suspendCoroutine { continuation ->
+            synchronized(experimentsReadyCallbacks) {
+                if (experimentsLoaded) {
+                    continuation.resume(Unit)
+                } else {
+                    experimentsReadyCallbacks.add { continuation.resume(Unit) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns a callback-based function that completes when experiments have been loaded.
+     * Useful for Java interop or when coroutines aren't available.
+     */
+    fun ready(callback: () -> Unit) {
+        synchronized(experimentsReadyCallbacks) {
+            if (experimentsLoaded) {
+                callback()
+            } else {
+                experimentsReadyCallbacks.add(callback)
+            }
+        }
+    }
+
+    /**
+     * Check if experiments have been loaded.
+     */
+    val areExperimentsLoaded: Boolean
+        get() = experimentsLoaded
+
+    /**
+     * Fetch experiments in the background.
+     */
+    private fun fetchExperimentsInBackground() {
+        scope.launch {
+            fetchExperiments()
+        }
+    }
+
+    /**
+     * Fetch experiments from the server.
+     * Called automatically during initialization and after identify().
+     *
+     * Flow:
+     * 1. Check SharedPreferences cache - if valid and same user, use cached variants
+     * 2. Otherwise, fetch from server with user_id
+     * 3. Store response in memory and SharedPreferences cache
+     */
+    private suspend fun fetchExperiments() {
+        val currentUserId = effectiveUserId
+
+        // Check SharedPreferences cache first
+        val cachedUserId = prefs?.getString(KEY_EXPERIMENTS_USER_ID, null)
+        val cachedFetchedAt = prefs?.getLong(KEY_EXPERIMENTS_FETCHED_AT, 0L) ?: 0L
+        val cacheAge = System.currentTimeMillis() - cachedFetchedAt
+
+        if (cachedUserId == currentUserId && cachedFetchedAt > 0 && cacheAge < EXPERIMENTS_CACHE_TTL_MS) {
+            // Use cached variants
+            val cachedVariantsJson = prefs?.getString(KEY_EXPERIMENTS_VARIANTS, null)
+            if (cachedVariantsJson != null) {
+                try {
+                    val cachedVariants = parseVariantsFromJson(cachedVariantsJson)
+                    synchronized(assignedVariants) {
+                        assignedVariants.clear()
+                        assignedVariants.putAll(cachedVariants)
+                    }
+                    MGMLogger.debug("Using cached experiment variants (age: ${cacheAge / 1000 / 60}min)")
+                    markExperimentsReady()
+                    return
+                } catch (e: Exception) {
+                    MGMLogger.debug("Failed to load experiments cache: ${e.message}")
+                }
+            }
+        }
+
+        // Fetch from server
+        val result = networkClient.fetchExperiments(currentUserId)
+
+        when (result) {
+            is ExperimentsResult.Success -> {
+                synchronized(assignedVariants) {
+                    assignedVariants.clear()
+                    assignedVariants.putAll(result.response.assignedVariants)
+                }
+
+                // Cache in SharedPreferences
+                saveExperimentsCache(currentUserId, result.response.assignedVariants)
+            }
+            is ExperimentsResult.Failure -> {
+                MGMLogger.warn("Failed to fetch experiments: ${result.error.message}")
+            }
+        }
+
+        markExperimentsReady()
+    }
+
+    /**
+     * Mark experiments as loaded and notify all waiting callbacks.
+     */
+    private fun markExperimentsReady() {
+        synchronized(experimentsReadyCallbacks) {
+            experimentsLoaded = true
+            experimentsReadyCallbacks.forEach { it() }
+            experimentsReadyCallbacks.clear()
+        }
+    }
+
+    /**
+     * Save experiment variants to SharedPreferences cache.
+     */
+    private fun saveExperimentsCache(userId: String, variants: Map<String, String>) {
+        try {
+            val variantsJson = org.json.JSONObject(variants).toString()
+            prefs?.edit()
+                ?.putString(KEY_EXPERIMENTS_USER_ID, userId)
+                ?.putString(KEY_EXPERIMENTS_VARIANTS, variantsJson)
+                ?.putLong(KEY_EXPERIMENTS_FETCHED_AT, System.currentTimeMillis())
+                ?.apply()
+        } catch (e: Exception) {
+            MGMLogger.debug("Failed to save experiments cache: ${e.message}")
+        }
+    }
+
+    /**
+     * Parse variants from JSON string.
+     */
+    private fun parseVariantsFromJson(json: String): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        val jsonObject = org.json.JSONObject(json)
+        val keys = jsonObject.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            result[key] = jsonObject.getString(key)
+        }
+        return result
+    }
+
+    /**
+     * Invalidate (clear) the experiments cache.
+     * Called when user identity changes.
+     */
+    private fun invalidateExperimentsCache() {
+        // Clear in-memory state
+        synchronized(assignedVariants) {
+            assignedVariants.clear()
+        }
+        experimentsLoaded = false
+
+        // Clear SharedPreferences cache
+        prefs?.edit()
+            ?.remove(KEY_EXPERIMENTS_USER_ID)
+            ?.remove(KEY_EXPERIMENTS_VARIANTS)
+            ?.remove(KEY_EXPERIMENTS_FETCHED_AT)
+            ?.apply()
+
+        MGMLogger.debug("Invalidated experiments cache")
+    }
+
+    /**
+     * Convert a string to snake_case.
+     * Used for experiment property names (e.g., "button-color" -> "button_color").
+     */
+    private fun toSnakeCase(str: String): String {
+        return str
+            .replace(Regex("([A-Z])")) { "_${it.value}" }
+            .replace(Regex("[-\\s]+"), "_")
+            .lowercase()
+            .removePrefix("_")
+    }
+
+    // endregion
+
     companion object {
         private const val PREFS_NAME = "mostly_good_metrics"
         private const val KEY_USER_ID = "user_id"
@@ -549,8 +794,12 @@ class MostlyGoodMetrics private constructor(
         private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val KEY_IDENTIFY_HASH = "identify_hash"
         private const val KEY_IDENTIFY_TIMESTAMP = "identify_timestamp"
+        private const val KEY_EXPERIMENTS_USER_ID = "experiments_user_id"
+        private const val KEY_EXPERIMENTS_VARIANTS = "experiments_variants"
+        private const val KEY_EXPERIMENTS_FETCHED_AT = "experiments_fetched_at"
         private const val PLATFORM = "android"
         private const val TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000L
+        private const val EXPERIMENTS_CACHE_TTL_MS = 24 * 60 * 60 * 1000L // 24 hours
 
         /**
          * Generate a random alphanumeric string of the given length.
@@ -766,6 +1015,50 @@ class MostlyGoodMetrics private constructor(
         fun getSuperProperties(): Map<String, Any?> {
             return instance?.getSuperProperties() ?: emptyMap()
         }
+
+        // endregion
+
+        // region A/B Testing (Static)
+
+        /**
+         * Get the variant for an experiment using the shared instance.
+         * Returns the assigned variant ('a', 'b', etc.) or null if experiment not found.
+         *
+         * @param experimentName The name of the experiment
+         * @return The assigned variant, or null if not found or SDK not configured
+         */
+        @JvmStatic
+        @JvmName("getVariantStatic")
+        fun getVariant(experimentName: String): String? {
+            return instance?.getVariant(experimentName)
+        }
+
+        /**
+         * Returns a suspend function that completes when experiments have been loaded.
+         * Useful for waiting before calling getVariant() to ensure server-side experiments are available.
+         */
+        @JvmStatic
+        suspend fun ready() {
+            instance?.ready()
+        }
+
+        /**
+         * Returns a callback-based function that completes when experiments have been loaded.
+         * Useful for Java interop or when coroutines aren't available.
+         */
+        @JvmStatic
+        @JvmName("readyWithCallback")
+        fun ready(callback: () -> Unit) {
+            instance?.ready(callback) ?: callback()
+        }
+
+        /**
+         * Check if experiments have been loaded in the shared instance.
+         */
+        @JvmStatic
+        @get:JvmName("getAreExperimentsLoaded")
+        val areExperimentsLoaded: Boolean
+            get() = instance?.areExperimentsLoaded ?: false
 
         // endregion
 
