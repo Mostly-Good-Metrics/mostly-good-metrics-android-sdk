@@ -165,7 +165,8 @@ class ABTestingTest {
         assertEquals("a", variant)
 
         val superProps = sdk.getSuperProperties()
-        assertEquals("a", superProps["\$experiment_button_color"])
+        // Super properties are stored as Any?, so we need to check value equality
+        assertEquals("a", superProps["\$experiment_button_color"]?.toString())
 
         sdk.shutdown()
     }
@@ -192,9 +193,10 @@ class ABTestingTest {
         sdk.getVariant("Button Color")
 
         val superProps = sdk.getSuperProperties()
-        assertEquals("treatment", superProps["\$experiment_checkout_flow"])
-        assertEquals("b", superProps["\$experiment_new_onboarding"])
-        assertEquals("c", superProps["\$experiment_button_color"])
+        // Super properties are stored as Any?, so we need to check value equality
+        assertEquals("treatment", superProps["\$experiment_checkout_flow"]?.toString())
+        assertEquals("b", superProps["\$experiment_new_onboarding"]?.toString())
+        assertEquals("c", superProps["\$experiment_button_color"]?.toString())
 
         sdk.shutdown()
     }
@@ -226,7 +228,13 @@ class ABTestingTest {
 
         val properties = purchaseEvent!!.properties
         assertNotNull(properties)
-        val experimentValue = (properties?.get("\$experiment_checkout_flow") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        // The property is stored as a JsonElement (JsonPrimitive), so extract its content
+        val experimentProp = properties?.get("\$experiment_checkout_flow")
+        assertNotNull("Expected \$experiment_checkout_flow in event properties", experimentProp)
+        val experimentValue = when (experimentProp) {
+            is kotlinx.serialization.json.JsonPrimitive -> experimentProp.content
+            else -> experimentProp?.toString()
+        }
         assertEquals("treatment", experimentValue)
 
         sdk.shutdown()
@@ -368,12 +376,14 @@ class ABTestingTest {
         )
         val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
 
-        // First identify
+        // First identify - this changes from anonymous to user123, so it triggers a refetch
         sdk.identify("user123")
+        kotlinx.coroutines.delay(100)
         sdk.ready()
         val initialFetchCount = mockNetwork.fetchExperimentsCount
+        assertTrue("Expected at least 1 fetch after first identify", initialFetchCount >= 1)
 
-        // Identify again with same user
+        // Identify again with same user - should NOT trigger another fetch
         sdk.identify("user123")
 
         // Small delay to ensure no new fetch is triggered
@@ -510,8 +520,9 @@ class ABTestingTest {
         sdk.getVariant("exp2")
 
         val superProps = sdk.getSuperProperties()
-        assertEquals("a", superProps["\$experiment_exp1"])
-        assertEquals("b", superProps["\$experiment_exp2"])
+        // Super properties are stored as Any?, so we need to check value equality
+        assertEquals("a", superProps["\$experiment_exp1"]?.toString())
+        assertEquals("b", superProps["\$experiment_exp2"]?.toString())
 
         sdk.shutdown()
     }
