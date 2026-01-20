@@ -611,6 +611,7 @@ class MostlyGoodMetrics private constructor(
      * Returns a suspend function that completes when experiments have been loaded.
      * Useful for waiting before calling getVariant() to ensure server-side experiments are available.
      */
+    @JvmName("readySuspend")
     suspend fun ready() {
         if (experimentsLoaded) return
         suspendCoroutine { continuation ->
@@ -628,6 +629,7 @@ class MostlyGoodMetrics private constructor(
      * Returns a callback-based function that completes when experiments have been loaded.
      * Useful for Java interop or when coroutines aren't available.
      */
+    @JvmName("readyCallback")
     fun ready(callback: () -> Unit) {
         synchronized(experimentsReadyCallbacks) {
             if (experimentsLoaded) {
@@ -641,6 +643,7 @@ class MostlyGoodMetrics private constructor(
     /**
      * Check if experiments have been loaded.
      */
+    @get:JvmName("areExperimentsLoadedInstance")
     val areExperimentsLoaded: Boolean
         get() = experimentsLoaded
 
@@ -1038,6 +1041,7 @@ class MostlyGoodMetrics private constructor(
          * Useful for waiting before calling getVariant() to ensure server-side experiments are available.
          */
         @JvmStatic
+        @JvmName("readyStatic")
         suspend fun ready() {
             instance?.ready()
         }
@@ -1048,7 +1052,7 @@ class MostlyGoodMetrics private constructor(
          */
         @JvmStatic
         @JvmName("readyWithCallback")
-        fun ready(callback: () -> Unit) {
+        fun readyWithCallback(callback: () -> Unit) {
             instance?.ready(callback) ?: callback()
         }
 
@@ -1056,8 +1060,8 @@ class MostlyGoodMetrics private constructor(
          * Check if experiments have been loaded in the shared instance.
          */
         @JvmStatic
-        @get:JvmName("getAreExperimentsLoaded")
         val areExperimentsLoaded: Boolean
+            @JvmName("getAreExperimentsLoadedStatic")
             get() = instance?.areExperimentsLoaded ?: false
 
         // endregion
