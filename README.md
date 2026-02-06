@@ -83,6 +83,7 @@ For more control, use `MGMConfiguration.Builder`:
 val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
     .baseUrl("https://mostlygoodmetrics.com")
     .environment("production")
+    .appVersion("1.0.0")
     .maxBatchSize(100)
     .flushIntervalSeconds(30)
     .maxStoredEvents(10000)
@@ -98,6 +99,7 @@ MostlyGoodMetrics.configure(this, config)
 | `apiKey` | Required | Your API key |
 | `baseUrl` | `https://mostlygoodmetrics.com` | API endpoint |
 | `environment` | `"production"` | Environment name |
+| `appVersion` | Auto-detected | Override app version string |
 | `packageName` | App's package name | Override package identifier |
 | `maxBatchSize` | `100` | Events per batch (1-1000) |
 | `flushIntervalSeconds` | `30` | Auto-flush interval in seconds |
@@ -116,7 +118,7 @@ When `trackAppLifecycleEvents` is enabled (default), the SDK automatically track
 | `$app_opened` | App became active (foreground) | - |
 | `$app_backgrounded` | App resigned active (background) | - |
 
-## Automatic Context
+## Automatic Context/Properties
 
 Every event automatically includes:
 
@@ -142,14 +144,14 @@ Event names must:
 
 ```kotlin
 // Valid
-MostlyGoodMetrics.track("button_clicked")
-MostlyGoodMetrics.track("PurchaseCompleted")
-MostlyGoodMetrics.track("step_1_completed")
+MostlyGoodMetrics.track("button_clicked")     // lowercase with underscore
+MostlyGoodMetrics.track("PurchaseCompleted")  // camelCase
+MostlyGoodMetrics.track("step_1_completed")   // alphanumeric with underscore
 
 // Invalid (will be ignored)
-MostlyGoodMetrics.track("123_event")      // starts with number
-MostlyGoodMetrics.track("event-name")     // contains hyphen
-MostlyGoodMetrics.track("event name")     // contains space
+MostlyGoodMetrics.track("123_event")          // starts with number
+MostlyGoodMetrics.track("event-name")         // contains hyphen
+MostlyGoodMetrics.track("event name")         // contains space
 ```
 
 ## Properties
@@ -175,6 +177,26 @@ MostlyGoodMetrics.track("checkout", mapOf(
 - Nesting depth: max 3 levels
 - Total properties size: max 10KB
 
+## User Identification
+
+Associate events with a specific user by calling `identify()`:
+
+```kotlin
+// Set user identity (e.g., after login)
+MostlyGoodMetrics.identify("user_123")
+```
+
+The user ID persists across app launches and is included in all subsequent events.
+
+To clear the user identity (e.g., on logout):
+
+```kotlin
+// Reset identity
+MostlyGoodMetrics.resetIdentity()
+```
+
+After calling `resetIdentity()`, events will no longer include a user ID until `identify()` is called again.
+
 ## Manual Flush
 
 Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
@@ -194,15 +216,15 @@ MostlyGoodMetrics.flush { result ->
 
 The SDK automatically:
 
-- **Persists events** to disk, surviving app restarts
-- **Batches events** for efficient network usage
-- **Flushes on interval** (default: every 30 seconds)
-- **Flushes on background** when the app goes to background
-- **Retries on failure** for network errors (events are preserved)
-- **Compresses payloads** using gzip for requests > 1KB
-- **Handles rate limiting** by respecting `Retry-After` headers
-- **Persists user ID** across app launches
-- **Generates session IDs** per app launch
+- **Persists** events to disk, surviving app restarts
+- **Batches** events for efficient network usage
+- **Flushes** on interval (default: every 30 seconds)
+- **Flushes** on background when the app goes to background
+- **Retries** on failure for network errors (events are preserved)
+- **Compresses** payloads using gzip for requests > 1KB
+- **Handles** rate limiting by respecting `Retry-After` headers
+- **Persists** user ID across app launches
+- **Generates** session IDs per app launch
 
 ## Debug Logging
 
@@ -217,10 +239,10 @@ MostlyGoodMetrics.configure(this, config)
 
 Output example:
 ```
-D/MostlyGoodMetrics: Initialized with 3 cached events
-D/MostlyGoodMetrics: Tracked event: button_clicked
-D/MostlyGoodMetrics: Flushing 4 events
-D/MostlyGoodMetrics: Successfully flushed 4 events
+[MostlyGoodMetrics] Initialized with 3 cached events
+[MostlyGoodMetrics] Tracked event: button_clicked
+[MostlyGoodMetrics] Flushing 4 events
+[MostlyGoodMetrics] Successfully flushed 4 events
 ```
 
 ## Thread Safety
