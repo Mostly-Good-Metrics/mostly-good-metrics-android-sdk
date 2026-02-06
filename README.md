@@ -212,6 +212,19 @@ MostlyGoodMetrics.flush { result ->
 }
 ```
 
+To check pending events:
+
+```kotlin
+val count = MostlyGoodMetrics.pendingEventCount
+Log.d("Analytics", "$count events pending")
+```
+
+To clear all pending events without sending them:
+
+```kotlin
+MostlyGoodMetrics.clearPendingEvents()
+```
+
 ## Automatic Behavior
 
 The SDK automatically:
@@ -257,13 +270,27 @@ The SDK works with Java:
 // Initialize
 MostlyGoodMetrics.configure(context, "mgm_proj_your_api_key");
 
-// Track
+// Track events
 Map<String, Object> props = new HashMap<>();
 props.put("button_name", "submit");
 MostlyGoodMetrics.track("button_clicked", props);
 
-// Identify
+// Identify users
 MostlyGoodMetrics.identify("user_123");
+
+// Reset identity (e.g., on logout)
+MostlyGoodMetrics.resetIdentity();
+
+// Manual flush
+MostlyGoodMetrics.flush(result -> {
+    // Handle result
+});
+
+// Get pending event count
+int count = MostlyGoodMetrics.getCurrentPendingEventCount();
+
+// Clear pending events
+MostlyGoodMetrics.clearPendingEvents();
 ```
 
 ## ProGuard / R8
