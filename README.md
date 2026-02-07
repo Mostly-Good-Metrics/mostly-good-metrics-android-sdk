@@ -81,7 +81,7 @@ For more control, use `MGMConfiguration.Builder`:
 
 ```kotlin
 val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
-    .baseUrl("https://mostlygoodmetrics.com")
+    .baseUrl("https://ingest.mostlygoodmetrics.com")
     .environment("production")
     .maxBatchSize(100)
     .flushIntervalSeconds(30)
@@ -96,7 +96,7 @@ MostlyGoodMetrics.configure(this, config)
 | Option | Default | Description |
 |--------|---------|-------------|
 | `apiKey` | Required | Your API key |
-| `baseUrl` | `https://mostlygoodmetrics.com` | API endpoint |
+| `baseUrl` | `https://ingest.mostlygoodmetrics.com` | API endpoint |
 | `environment` | `"production"` | Environment name |
 | `packageName` | App's package name | Override package identifier |
 | `maxBatchSize` | `100` | Events per batch (1-1000) |
@@ -111,8 +111,8 @@ When `trackAppLifecycleEvents` is enabled (default), the SDK automatically track
 
 | Event | When | Properties |
 |-------|------|------------|
-| `$app_installed` | First launch after install | `$version` |
-| `$app_updated` | First launch after version change | `$version`, `$previous_version` |
+| `$app_installed` | First launch after install | `version` |
+| `$app_updated` | First launch after version change | `version`, `previous_version` |
 | `$app_opened` | App became active (foreground) | - |
 | `$app_backgrounded` | App resigned active (background) | - |
 
@@ -175,6 +175,50 @@ MostlyGoodMetrics.track("checkout", mapOf(
 - Nesting depth: max 3 levels
 - Total properties size: max 10KB
 
+## Super Properties
+
+Set properties that will be included with every event:
+
+```kotlin
+// Set a single super property
+MostlyGoodMetrics.setSuperProperty("plan", "premium")
+
+// Set multiple super properties
+MostlyGoodMetrics.setSuperProperties(mapOf(
+    "plan" to "premium",
+    "tier" to "gold"
+))
+
+// Get current super properties
+val props = MostlyGoodMetrics.getSuperProperties()
+
+// Remove a super property
+MostlyGoodMetrics.removeSuperProperty("plan")
+
+// Clear all super properties
+MostlyGoodMetrics.clearSuperProperties()
+```
+
+Super properties are persisted across app launches and merged with event properties (event properties take precedence).
+
+## User Identification
+
+```kotlin
+// Basic identification
+MostlyGoodMetrics.identify("user_123")
+
+// Identification with profile data
+MostlyGoodMetrics.identify("user_123", UserProfile(
+    email = "user@example.com",
+    name = "John Doe"
+))
+
+// Reset identity (e.g., on logout)
+MostlyGoodMetrics.resetIdentity()
+```
+
+Profile data is sent via a debounced `$identify` event (only sent if data changed or after 24 hours).
+
 ## Manual Flush
 
 Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
@@ -235,13 +279,23 @@ The SDK works with Java:
 // Initialize
 MostlyGoodMetrics.configure(context, "mgm_proj_your_api_key");
 
-// Track
+// Track events
 Map<String, Object> props = new HashMap<>();
 props.put("button_name", "submit");
-MostlyGoodMetrics.track("button_clicked", props);
+MostlyGoodMetrics.trackEvent("button_clicked", props);
 
-// Identify
-MostlyGoodMetrics.identify("user_123");
+// Identify users
+MostlyGoodMetrics.identifyUser("user_123", null);
+
+// Or with profile data
+UserProfile profile = new UserProfile("user@example.com", "John Doe");
+MostlyGoodMetrics.identifyUser("user_123", profile);
+
+// Reset identity
+MostlyGoodMetrics.resetUserIdentity();
+
+// Flush events
+MostlyGoodMetrics.flushEvents(null);
 ```
 
 ## ProGuard / R8
