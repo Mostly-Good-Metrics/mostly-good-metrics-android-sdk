@@ -8,11 +8,13 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration Options](#configuration-options)
-- [Automatic Events](#automatic-events)
-- [Automatic Context](#automatic-context)
+- [User Identification](#user-identification)
+- [Tracking Events](#tracking-events)
 - [Event Naming](#event-naming)
 - [Properties](#properties)
 - [Manual Flush](#manual-flush)
+- [Automatic Events](#automatic-events)
+- [Automatic Context](#automatic-context)
 - [Automatic Behavior](#automatic-behavior)
 - [Debug Logging](#debug-logging)
 - [Thread Safety](#thread-safety)
@@ -29,13 +31,27 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 
 ### Gradle (Kotlin DSL)
 
+Add the dependency to your `build.gradle.kts`:
+
 ```kotlin
 dependencies {
     implementation("com.github.Mostly-Good-Metrics:mostly-good-metrics-android-sdk:1.0.0")
 }
 ```
 
+Add JitPack repository to your `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+```
+
 ### Gradle (Groovy)
+
+Add the dependency to your `build.gradle`:
 
 ```groovy
 dependencies {
@@ -43,14 +59,40 @@ dependencies {
 }
 ```
 
-> **Note:** Add JitPack repository to your `settings.gradle.kts`:
-> ```kotlin
-> dependencyResolutionManagement {
->     repositories {
->         maven { url = uri("https://jitpack.io") }
->     }
-> }
-> ```
+Add JitPack repository to your `settings.gradle`:
+
+```groovy
+dependencyResolutionManagement {
+    repositories {
+        maven { url 'https://jitpack.io' }
+    }
+}
+```
+
+### Alternative Package Managers
+
+#### Maven
+
+Add the JitPack repository to your `pom.xml`:
+
+```xml
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
+    </repository>
+</repositories>
+```
+
+Add the dependency:
+
+```xml
+<dependency>
+    <groupId>com.github.Mostly-Good-Metrics</groupId>
+    <artifactId>mostly-good-metrics-android-sdk</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
 
 ## Quick Start
 
@@ -88,7 +130,17 @@ class MainActivity : ComponentActivity() {
 
 > **Note:** Using an `Application` class is preferred as it ensures the SDK is initialized before any Activity launches and enables automatic lifecycle tracking across all activities.
 
-### 2. Track Events
+### 2. Identify Users
+
+```kotlin
+// Set user identity
+MostlyGoodMetrics.identify("user_123")
+
+// Reset identity (e.g., on logout)
+MostlyGoodMetrics.resetIdentity()
+```
+
+### 3. Track Events
 
 ```kotlin
 // Simple event
@@ -100,16 +152,6 @@ MostlyGoodMetrics.track("purchase_completed", mapOf(
     "price" to 29.99,
     "currency" to "USD"
 ))
-```
-
-### 3. Identify Users
-
-```kotlin
-// Set user identity
-MostlyGoodMetrics.identify("user_123")
-
-// Reset identity (e.g., on logout)
-MostlyGoodMetrics.resetIdentity()
 ```
 
 That's it! Events are automatically batched and sent.
@@ -144,33 +186,58 @@ MostlyGoodMetrics.configure(this, config)
 | `enableDebugLogging` | `false` | Enable logcat output |
 | `trackAppLifecycleEvents` | `true` | Auto-track lifecycle events |
 
-## Automatic Events
+## User Identification
 
-When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
+Associate events with specific users by calling `identify()`:
 
-| Event | When | Properties |
-|-------|------|------------|
-| `$app_installed` | First launch after install | `$version` |
-| `$app_updated` | First launch after version change | `$version`, `$previous_version` |
-| `$app_opened` | App became active (foreground) | - |
-| `$app_backgrounded` | App resigned active (background) | - |
+```kotlin
+// Set user identity
+MostlyGoodMetrics.identify("user_123")
 
-## Automatic Context
+// With profile data (email, name)
+MostlyGoodMetrics.identify(
+    "user_123",
+    UserProfile(email = "user@example.com", name = "John Doe")
+)
+```
 
-Every event automatically includes:
+**Identity Persistence:**
+- User IDs persist across app launches
+- Profile data (`email`, `name`) is sent via a special `$identify` event
+- Profile updates are debounced (only sent if changed or >24h since last send)
 
-| Field | Example | Description |
-|-------|---------|-------------|
-| `platform` | `"android"` | Platform |
-| `os_version` | `"14"` | Android version |
-| `app_version` | `"1.0.0 (42)"` | App version with build number |
-| `environment` | `"production"` | Environment from configuration |
-| `session_id` | `"uuid..."` | Unique session ID (per app launch) |
-| `user_id` | `"user_123"` | User ID (if set via `identify()`) |
-| `$device_type` | `"phone"` | Device type (phone, tablet, tv, watch) |
-| `$device_model` | `"Pixel 8"` | Device model identifier |
+**Anonymous Users:**
+- Before calling `identify()`, users are tracked with an auto-generated anonymous ID
+- Format: `$anon_xxxxxxxxxxxx` (12 random alphanumeric characters)
+- Anonymous IDs persist across app launches
 
-> **Note:** The `$` prefix indicates reserved system events and properties. Avoid using `$` prefix for your own custom events.
+**Reset Identity:**
+
+Clear the user identity on logout:
+
+```kotlin
+MostlyGoodMetrics.resetIdentity()
+```
+
+This clears the persisted user ID and resets profile state. Events will use the anonymous ID until `identify()` is called again.
+
+## Tracking Events
+
+Track custom events with optional properties:
+
+```kotlin
+// Simple event
+MostlyGoodMetrics.track("button_clicked")
+
+// Event with properties
+MostlyGoodMetrics.track("purchase_completed", mapOf(
+    "product_id" to "SKU123",
+    "price" to 29.99,
+    "currency" to "USD"
+))
+```
+
+Events are automatically enriched with context (platform, OS version, device info, etc.) and batched for efficient delivery.
 
 ## Event Naming
 
@@ -231,20 +298,68 @@ MostlyGoodMetrics.flush { result ->
 }
 ```
 
+## Automatic Events
+
+When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
+
+| Event | When | Properties |
+|-------|------|------------|
+| `$app_installed` | First launch after install | `$version` |
+| `$app_updated` | First launch after version change | `$version`, `$previous_version` |
+| `$app_opened` | App became active (foreground) | - |
+| `$app_backgrounded` | App resigned active (background) | - |
+
+## Automatic Context
+
+Every event automatically includes the following context properties:
+
+| Property | Example | Description |
+|----------|---------|-------------|
+| `platform` | `"android"` | Operating system platform |
+| `os_version` | `"14"` | Android OS version (from `Build.VERSION.RELEASE`) |
+| `app_version` | `"1.0.0"` | App version name from `PackageInfo` |
+| `app_build_number` | `"42"` | App version code / build number |
+| `environment` | `"production"` | Environment name from configuration |
+| `session_id` | `"uuid..."` | Unique session ID (generated per app launch) |
+| `user_id` | `"user_123"` or `"$anon_xxx"` | User ID (set via `identify()`) or anonymous ID |
+| `device_manufacturer` | `"Google"` | Device manufacturer (from `Build.MANUFACTURER`) |
+| `locale` | `"en_US"` | User's current locale setting |
+| `timezone` | `"America/New_York"` | Device timezone identifier |
+| `$device_type` | `"phone"` or `"tablet"` | Device form factor (based on screen size) |
+| `$device_model` | `"Pixel 8"` | Device model name (from `Build.MODEL`) |
+| `$sdk` | `"android"` | SDK identifier (or wrapper name if applicable) |
+
+> **Note:** The `$` prefix indicates reserved system properties. Avoid using `$` prefix for your own custom properties.
+
 ## Automatic Behavior
 
 The SDK automatically handles the following without any additional configuration:
 
+**Event Management:**
 - **Event persistence** - Events are saved to disk and survive app restarts
-- **Batch processing** - Events are grouped for efficient network usage
+- **Batch processing** - Events are grouped into batches (default: 100 events per batch)
 - **Periodic flush** - Events are sent every 30 seconds (configurable via `flushIntervalSeconds`)
-- **Background flush** - Events are sent when the app goes to background
+- **Automatic flush on batch size** - Events flush immediately when batch size is reached
 - **Retry on failure** - Failed requests are retried; events are preserved until successfully sent
 - **Payload compression** - Large batches (>1KB) are automatically gzip compressed
 - **Rate limiting** - Exponential backoff when rate limited by the server (respects `Retry-After` headers)
-- **User ID persistence** - User identity set via `identify()` persists across app launches
-- **Session management** - New session ID generated on each app launch
 - **Deduplication** - Events include unique IDs (`client_event_id`) to prevent duplicate processing
+
+**Lifecycle Tracking:**
+- **App lifecycle events** - Automatically tracks `$app_opened`, `$app_backgrounded`, `$app_installed`, and `$app_updated`
+- **Background flush** - Events are automatically flushed when the app goes to background (via `ProcessLifecycleOwner`)
+- **Session management** - New session ID generated on each app launch and persisted for the entire session
+- **Install/update detection** - Tracks first install and version changes by comparing stored version with current
+
+**User & Identity:**
+- **User ID persistence** - User identity set via `identify()` persists across app launches in SharedPreferences
+- **Anonymous ID** - Auto-generated anonymous ID (`$anon_xxxxxxxxxxxx`) for users before identification
+- **Profile debouncing** - `$identify` events with profile data (email, name) are only sent if changed or >24h since last send
+
+**Context Collection:**
+- **Automatic context** - Every event includes platform, OS version, device info, locale, timezone, etc.
+- **Super properties** - Set persistent properties that are included with every event
+- **Dynamic context** - Context like app version and build number are collected at event time
 
 ## Debug Logging
 
