@@ -6,18 +6,20 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 
 - [Requirements](#requirements)
 - [Installation](#installation)
+  - [Gradle (Kotlin DSL)](#gradle-kotlin-dsl)
+  - [Gradle (Groovy)](#gradle-groovy)
+  - [Alternative Package Managers](#alternative-package-managers)
 - [Quick Start](#quick-start)
 - [Configuration Options](#configuration-options)
 - [User Identification](#user-identification)
 - [Tracking Events](#tracking-events)
-- [Event Naming](#event-naming)
-- [Properties](#properties)
-- [Manual Flush](#manual-flush)
 - [Automatic Events](#automatic-events)
 - [Automatic Context](#automatic-context)
-- [Automatic Behavior](#automatic-behavior)
+- [Event Naming](#event-naming)
+- [Properties](#properties)
 - [Debug Logging](#debug-logging)
-- [Thread Safety](#thread-safety)
+- [Automatic Behavior](#automatic-behavior)
+- [Manual Flush](#manual-flush)
 - [Java Interop](#java-interop)
 - [ProGuard / R8](#proguard--r8)
 - [License](#license)
@@ -239,6 +241,39 @@ MostlyGoodMetrics.track("purchase_completed", mapOf(
 
 Events are automatically enriched with context (platform, OS version, device info, etc.) and batched for efficient delivery.
 
+## Automatic Events
+
+When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
+
+| Event | When | Properties |
+|-------|------|------------|
+| `$app_installed` | First launch after install | `$version` |
+| `$app_updated` | First launch after version change | `$version`, `$previous_version` |
+| `$app_opened` | App became active (foreground) | - |
+| `$app_backgrounded` | App resigned active (background) | - |
+
+## Automatic Context
+
+Every event automatically includes the following context properties:
+
+| Field | Example | Description |
+|-------|---------|-------------|
+| `platform` | `"android"` | Operating system platform |
+| `os_version` | `"14"` | Android OS version (from `Build.VERSION.RELEASE`) |
+| `app_version` | `"1.0.0"` | App version name from `PackageInfo.versionName` |
+| `app_build_number` | `"42"` | App version code / build number from `PackageInfo.versionCode` |
+| `environment` | `"production"` | Environment name from configuration |
+| `session_id` | `"uuid..."` | Unique session ID (generated per app launch) |
+| `user_id` | `"user_123"` or `"$anon_xxx"` | User ID (set via `identify()`) or anonymous ID |
+| `device_manufacturer` | `"Google"` | Device manufacturer (from `Build.MANUFACTURER`) |
+| `locale` | `"en_US"` | User's current locale from device settings |
+| `timezone` | `"America/New_York"` | Device timezone identifier from system settings |
+| `$device_type` | `"phone"` or `"tablet"` | Device form factor (based on screen size and configuration) |
+| `$device_model` | `"Pixel 8"` | Device model name (from `Build.MODEL`) |
+| `$sdk` | `"android"` | SDK identifier ("android" or wrapper name if applicable) |
+
+> **Note:** The `$` prefix indicates reserved system properties and events. Avoid using `$` prefix for your own custom properties.
+
 ## Event Naming
 
 Event names must:
@@ -283,53 +318,24 @@ MostlyGoodMetrics.track("checkout", mapOf(
 - Nesting depth: max 3 levels
 - Total properties size: max 10KB
 
-## Manual Flush
+## Debug Logging
 
-Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
+Enable debug logging to see SDK activity in logcat:
 
 ```kotlin
-MostlyGoodMetrics.flush { result ->
-    result.onSuccess {
-        Log.d("Analytics", "Events flushed successfully")
-    }
-    result.onFailure { error ->
-        Log.e("Analytics", "Flush failed", error)
-    }
-}
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .enableDebugLogging(true)
+    .build()
+MostlyGoodMetrics.configure(this, config)
 ```
 
-## Automatic Events
-
-When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
-
-| Event | When | Properties |
-|-------|------|------------|
-| `$app_installed` | First launch after install | `$version` |
-| `$app_updated` | First launch after version change | `$version`, `$previous_version` |
-| `$app_opened` | App became active (foreground) | - |
-| `$app_backgrounded` | App resigned active (background) | - |
-
-## Automatic Context
-
-Every event automatically includes the following context properties:
-
-| Property | Example | Description |
-|----------|---------|-------------|
-| `platform` | `"android"` | Operating system platform |
-| `os_version` | `"14"` | Android OS version (from `Build.VERSION.RELEASE`) |
-| `app_version` | `"1.0.0"` | App version name from `PackageInfo` |
-| `app_build_number` | `"42"` | App version code / build number |
-| `environment` | `"production"` | Environment name from configuration |
-| `session_id` | `"uuid..."` | Unique session ID (generated per app launch) |
-| `user_id` | `"user_123"` or `"$anon_xxx"` | User ID (set via `identify()`) or anonymous ID |
-| `device_manufacturer` | `"Google"` | Device manufacturer (from `Build.MANUFACTURER`) |
-| `locale` | `"en_US"` | User's current locale setting |
-| `timezone` | `"America/New_York"` | Device timezone identifier |
-| `$device_type` | `"phone"` or `"tablet"` | Device form factor (based on screen size) |
-| `$device_model` | `"Pixel 8"` | Device model name (from `Build.MODEL`) |
-| `$sdk` | `"android"` | SDK identifier (or wrapper name if applicable) |
-
-> **Note:** The `$` prefix indicates reserved system properties. Avoid using `$` prefix for your own custom properties.
+Output example:
+```
+D/MostlyGoodMetrics: Initialized with 3 cached events
+D/MostlyGoodMetrics: Tracked event: button_clicked
+D/MostlyGoodMetrics: Flushing 4 events
+D/MostlyGoodMetrics: Successfully flushed 4 events
+```
 
 ## Automatic Behavior
 
@@ -361,28 +367,27 @@ The SDK automatically handles the following without any additional configuration
 - **Super properties** - Set persistent properties that are included with every event
 - **Dynamic context** - Context like app version and build number are collected at event time
 
-## Debug Logging
+**Thread Safety:**
 
-Enable debug logging to see SDK activity in logcat:
+The SDK is fully thread-safe. All methods can be called from any thread:
+- Event tracking uses internal queues for safe concurrent access
+- Flush operations are serialized to prevent race conditions
+- Storage operations are atomic
+
+## Manual Flush
+
+Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
 
 ```kotlin
-val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
-    .enableDebugLogging(true)
-    .build()
-MostlyGoodMetrics.configure(this, config)
+MostlyGoodMetrics.flush { result ->
+    result.onSuccess {
+        Log.d("Analytics", "Events flushed successfully")
+    }
+    result.onFailure { error ->
+        Log.e("Analytics", "Flush failed", error)
+    }
+}
 ```
-
-Output example:
-```
-D/MostlyGoodMetrics: Initialized with 3 cached events
-D/MostlyGoodMetrics: Tracked event: button_clicked
-D/MostlyGoodMetrics: Flushing 4 events
-D/MostlyGoodMetrics: Successfully flushed 4 events
-```
-
-## Thread Safety
-
-The SDK is fully thread-safe. You can call `track()` from any thread.
 
 ## Java Interop
 
