@@ -2,6 +2,24 @@
 
 A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics](https://mostlygoodmetrics.com).
 
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration Options](#configuration-options)
+- [Automatic Events](#automatic-events)
+- [Automatic Context](#automatic-context)
+- [Event Naming](#event-naming)
+- [Properties](#properties)
+- [Manual Flush](#manual-flush)
+- [Automatic Behavior](#automatic-behavior)
+- [Debug Logging](#debug-logging)
+- [Thread Safety](#thread-safety)
+- [Java Interop](#java-interop)
+- [ProGuard / R8](#proguard--r8)
+- [License](#license)
+
 ## Requirements
 
 - Android SDK 21+ (Android 5.0 Lollipop)
@@ -38,7 +56,9 @@ dependencies {
 
 ### 1. Initialize the SDK
 
-Initialize once in your `Application` class:
+Initialize once at app startup. Choose the approach that matches your app architecture:
+
+**Application class (recommended):**
 
 ```kotlin
 class MyApplication : Application() {
@@ -48,6 +68,25 @@ class MyApplication : Application() {
     }
 }
 ```
+
+**Jetpack Compose (in MainActivity):**
+
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Initialize before setContent
+        MostlyGoodMetrics.configure(applicationContext, "mgm_proj_your_api_key")
+
+        setContent {
+            MyApp()
+        }
+    }
+}
+```
+
+> **Note:** Using an `Application` class is preferred as it ensures the SDK is initialized before any Activity launches and enables automatic lifecycle tracking across all activities.
 
 ### 2. Track Events
 
@@ -139,6 +178,8 @@ Event names must:
 - Start with a letter (or `$` for system events)
 - Contain only alphanumeric characters and underscores
 - Be 255 characters or less
+
+> **Reserved `$` prefix:** The `$` prefix is reserved for system events (e.g., `$app_opened`). Avoid using `$` for your own custom event names.
 
 ```kotlin
 // Valid
