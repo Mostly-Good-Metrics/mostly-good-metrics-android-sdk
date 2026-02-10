@@ -233,17 +233,18 @@ MostlyGoodMetrics.flush { result ->
 
 ## Automatic Behavior
 
-The SDK automatically:
+The SDK automatically handles the following without any additional configuration:
 
-- **Persists events** to disk, surviving app restarts
-- **Batches events** for efficient network usage
-- **Flushes on interval** (default: every 30 seconds)
-- **Flushes on background** when the app goes to background
-- **Retries on failure** for network errors (events are preserved)
-- **Compresses payloads** using gzip for requests > 1KB
-- **Handles rate limiting** by respecting `Retry-After` headers
-- **Persists user ID** across app launches
-- **Generates session IDs** per app launch
+- **Event persistence** - Events are saved to disk and survive app restarts
+- **Batch processing** - Events are grouped for efficient network usage
+- **Periodic flush** - Events are sent every 30 seconds (configurable via `flushIntervalSeconds`)
+- **Background flush** - Events are sent when the app goes to background
+- **Retry on failure** - Failed requests are retried; events are preserved until successfully sent
+- **Payload compression** - Large batches (>1KB) are automatically gzip compressed
+- **Rate limiting** - Exponential backoff when rate limited by the server (respects `Retry-After` headers)
+- **User ID persistence** - User identity set via `identify()` persists across app launches
+- **Session management** - New session ID generated on each app launch
+- **Deduplication** - Events include unique IDs (`client_event_id`) to prevent duplicate processing
 
 ## Debug Logging
 
