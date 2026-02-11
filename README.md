@@ -13,13 +13,14 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 - [Configuration Options](#configuration-options)
 - [User Identification](#user-identification)
 - [Tracking Events](#tracking-events)
+- [Automatic Behavior](#automatic-behavior)
 - [Automatic Events](#automatic-events)
 - [Automatic Context](#automatic-context)
 - [Event Naming](#event-naming)
 - [Properties](#properties)
-- [Debug Logging](#debug-logging)
-- [Automatic Behavior](#automatic-behavior)
+- [Super Properties](#super-properties)
 - [Manual Flush](#manual-flush)
+- [Debug Logging](#debug-logging)
 - [Java Interop](#java-interop)
 - [ProGuard / R8](#proguard--r8)
 - [License](#license)
@@ -241,6 +242,43 @@ MostlyGoodMetrics.track("purchase_completed", mapOf(
 
 Events are automatically enriched with context (platform, OS version, device info, etc.) and batched for efficient delivery.
 
+## Automatic Behavior
+
+The SDK automatically handles the following without any additional configuration:
+
+**Event Management:**
+- **Event persistence** - Events are saved to disk and survive app restarts
+- **Batch processing** - Events are grouped into batches (default: 100 events per batch)
+- **Periodic flush** - Events are sent every 30 seconds (configurable via `flushIntervalSeconds`)
+- **Automatic flush on batch size** - Events flush immediately when batch size is reached
+- **Retry on failure** - Failed requests are retried; events are preserved until successfully sent
+- **Payload compression** - Large batches (>1KB) are automatically gzip compressed
+- **Rate limiting** - Exponential backoff when rate limited by the server (respects `Retry-After` headers)
+- **Deduplication** - Events include unique IDs (`client_event_id`) to prevent duplicate processing
+
+**Lifecycle Tracking:**
+- **App lifecycle events** - Automatically tracks `$app_opened`, `$app_backgrounded`, `$app_installed`, and `$app_updated`
+- **Background flush** - Events are automatically flushed when the app goes to background (via `ProcessLifecycleOwner`)
+- **Session management** - New session ID generated on each app launch and persisted for the entire session
+- **Install/update detection** - Tracks first install and version changes by comparing stored version with current
+
+**User & Identity:**
+- **User ID persistence** - User identity set via `identify()` persists across app launches in SharedPreferences
+- **Anonymous ID** - Auto-generated anonymous ID (`$anon_xxxxxxxxxxxx`) for users before identification
+- **Profile debouncing** - `$identify` events with profile data (email, name) are only sent if changed or >24h since last send
+
+**Context Collection:**
+- **Automatic context** - Every event includes platform, OS version, device info, locale, timezone, etc.
+- **Super properties** - Set persistent properties that are included with every event
+- **Dynamic context** - Context like app version and build number are collected at event time
+
+**Thread Safety:**
+
+The SDK is fully thread-safe. All methods can be called from any thread:
+- Event tracking uses internal queues for safe concurrent access
+- Flush operations are serialized to prevent race conditions
+- Storage operations are atomic
+
 ## Automatic Events
 
 When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
@@ -258,6 +296,8 @@ Every event automatically includes the following context properties:
 
 | Field | Example | Description |
 |-------|---------|-------------|
+| `client_event_id` | `"550e8400-e29b..."` | Unique UUID for deduplication |
+| `timestamp` | `2024-01-15T10:30:00.000Z` | ISO 8601 event timestamp |
 | `platform` | `"android"` | Operating system platform |
 | `os_version` | `"14"` | Android OS version (from `Build.VERSION.RELEASE`) |
 | `app_version` | `"1.0.0"` | App version name from `PackageInfo.versionName` |
@@ -272,7 +312,7 @@ Every event automatically includes the following context properties:
 | `$device_model` | `"Pixel 8"` | Device model name (from `Build.MODEL`) |
 | `$sdk` | `"android"` | SDK identifier ("android" or wrapper name if applicable) |
 
-> **Note:** The `$` prefix indicates reserved system properties and events. Avoid using `$` prefix for your own custom properties.
+> **Note:** The `$` prefix indicates reserved system events and properties. Avoid using `$` prefix for your own custom events.
 
 ## Event Naming
 
@@ -318,6 +358,68 @@ MostlyGoodMetrics.track("checkout", mapOf(
 - Nesting depth: max 3 levels
 - Total properties size: max 10KB
 
+## Super Properties
+
+Super properties are persistent properties that are automatically included with every event you track. They're useful for setting user attributes, app configuration, or other context that applies to all events.
+
+**Set a single super property:**
+
+```kotlin
+MostlyGoodMetrics.setSuperProperty("plan_type", "premium")
+```
+
+**Set multiple super properties:**
+
+```kotlin
+MostlyGoodMetrics.setSuperProperties(mapOf(
+    "plan_type" to "premium",
+    "user_role" to "admin",
+    "feature_flags" to mapOf(
+        "dark_mode" to true,
+        "beta_features" to false
+    )
+))
+```
+
+**Get current super properties:**
+
+```kotlin
+val superProps = MostlyGoodMetrics.getSuperProperties()
+```
+
+**Remove a super property:**
+
+```kotlin
+MostlyGoodMetrics.removeSuperProperty("plan_type")
+```
+
+**Clear all super properties:**
+
+```kotlin
+MostlyGoodMetrics.clearSuperProperties()
+```
+
+**Behavior:**
+- Super properties are persisted to disk and survive app restarts
+- They're included with every tracked event automatically
+- Setting a property with an existing key overwrites the previous value
+- Super properties are merged with event properties (event properties take precedence if keys conflict)
+
+## Manual Flush
+
+Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
+
+```kotlin
+MostlyGoodMetrics.flush { result ->
+    result.onSuccess {
+        Log.d("Analytics", "Events flushed successfully")
+    }
+    result.onFailure { error ->
+        Log.e("Analytics", "Flush failed", error)
+    }
+}
+```
+
 ## Debug Logging
 
 Enable debug logging to see SDK activity in logcat:
@@ -337,78 +439,105 @@ D/MostlyGoodMetrics: Flushing 4 events
 D/MostlyGoodMetrics: Successfully flushed 4 events
 ```
 
-## Automatic Behavior
-
-The SDK automatically handles the following without any additional configuration:
-
-**Event Management:**
-- **Event persistence** - Events are saved to disk and survive app restarts
-- **Batch processing** - Events are grouped into batches (default: 100 events per batch)
-- **Periodic flush** - Events are sent every 30 seconds (configurable via `flushIntervalSeconds`)
-- **Automatic flush on batch size** - Events flush immediately when batch size is reached
-- **Retry on failure** - Failed requests are retried; events are preserved until successfully sent
-- **Payload compression** - Large batches (>1KB) are automatically gzip compressed
-- **Rate limiting** - Exponential backoff when rate limited by the server (respects `Retry-After` headers)
-- **Deduplication** - Events include unique IDs (`client_event_id`) to prevent duplicate processing
-
-**Lifecycle Tracking:**
-- **App lifecycle events** - Automatically tracks `$app_opened`, `$app_backgrounded`, `$app_installed`, and `$app_updated`
-- **Background flush** - Events are automatically flushed when the app goes to background (via `ProcessLifecycleOwner`)
-- **Session management** - New session ID generated on each app launch and persisted for the entire session
-- **Install/update detection** - Tracks first install and version changes by comparing stored version with current
-
-**User & Identity:**
-- **User ID persistence** - User identity set via `identify()` persists across app launches in SharedPreferences
-- **Anonymous ID** - Auto-generated anonymous ID (`$anon_xxxxxxxxxxxx`) for users before identification
-- **Profile debouncing** - `$identify` events with profile data (email, name) are only sent if changed or >24h since last send
-
-**Context Collection:**
-- **Automatic context** - Every event includes platform, OS version, device info, locale, timezone, etc.
-- **Super properties** - Set persistent properties that are included with every event
-- **Dynamic context** - Context like app version and build number are collected at event time
-
-**Thread Safety:**
-
-The SDK is fully thread-safe. All methods can be called from any thread:
-- Event tracking uses internal queues for safe concurrent access
-- Flush operations are serialized to prevent race conditions
-- Storage operations are atomic
-
-## Manual Flush
-
-Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
-
-```kotlin
-MostlyGoodMetrics.flush { result ->
-    result.onSuccess {
-        Log.d("Analytics", "Events flushed successfully")
-    }
-    result.onFailure { error ->
-        Log.e("Analytics", "Flush failed", error)
-    }
-}
-```
-
 ## Java Interop
 
-The SDK works with Java:
+The SDK is fully compatible with Java. All Kotlin methods are accessible from Java code:
+
+**Initialize:**
 
 ```java
-// Initialize
+// Simple initialization
 MostlyGoodMetrics.configure(context, "mgm_proj_your_api_key");
 
-// Track
-Map<String, Object> props = new HashMap<>();
-props.put("button_name", "submit");
-MostlyGoodMetrics.track("button_clicked", props);
+// With configuration
+MGMConfiguration config = new MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .baseUrl("https://mostlygoodmetrics.com")
+    .environment("production")
+    .maxBatchSize(100)
+    .flushIntervalSeconds(30)
+    .enableDebugLogging(BuildConfig.DEBUG)
+    .trackAppLifecycleEvents(true)
+    .build();
 
-// Identify
+MostlyGoodMetrics.configure(context, config);
+```
+
+**Track events:**
+
+```java
+// Simple event
+MostlyGoodMetrics.track("button_clicked");
+
+// Event with properties
+Map<String, Object> props = new HashMap<>();
+props.put("product_id", "SKU123");
+props.put("price", 29.99);
+props.put("currency", "USD");
+MostlyGoodMetrics.track("purchase_completed", props);
+```
+
+**Identify users:**
+
+```java
+// Set user identity
 MostlyGoodMetrics.identify("user_123");
+
+// With profile data
+UserProfile profile = new UserProfile("user@example.com", "John Doe");
+MostlyGoodMetrics.identify("user_123", profile);
+
+// Reset identity
+MostlyGoodMetrics.resetIdentity();
+```
+
+**Super properties:**
+
+```java
+// Set single property
+MostlyGoodMetrics.setSuperProperty("plan_type", "premium");
+
+// Set multiple properties
+Map<String, Object> superProps = new HashMap<>();
+superProps.put("plan_type", "premium");
+superProps.put("user_role", "admin");
+MostlyGoodMetrics.setSuperProperties(superProps);
+
+// Get super properties
+Map<String, Object> props = MostlyGoodMetrics.getSuperProperties();
+
+// Remove property
+MostlyGoodMetrics.removeSuperProperty("plan_type");
+
+// Clear all
+MostlyGoodMetrics.clearSuperProperties();
+```
+
+**Manual flush:**
+
+```java
+MostlyGoodMetrics.flush(result -> {
+    if (result.isSuccess()) {
+        Log.d("Analytics", "Events flushed successfully");
+    } else {
+        Log.e("Analytics", "Flush failed", result.exceptionOrNull());
+    }
+});
 ```
 
 ## ProGuard / R8
 
-The SDK includes consumer ProGuard rules. No additional configuration needed.
+The SDK includes consumer ProGuard rules that are automatically applied when you enable code shrinking. No additional configuration is needed.
+
+**Included rules:**
+- Keeps public API classes (`MostlyGoodMetrics`, `MGMConfiguration`, etc.)
+- Preserves Kotlin serialization annotations and metadata
+- Protects event serialization classes
+
+**Verifying ProGuard is working:**
+
+If you're using ProGuard/R8 in your release builds, you can verify the SDK is correctly preserved by checking your mapping file (`build/outputs/mapping/release/mapping.txt`). The SDK's public API classes should appear without obfuscation.
+
+> **Note:** The consumer rules are defined in `consumer-rules.pro` and automatically applied by the Android Gradle Plugin. You don't need to add anything to your app's `proguard-rules.pro` file.
 
 ## License
 
