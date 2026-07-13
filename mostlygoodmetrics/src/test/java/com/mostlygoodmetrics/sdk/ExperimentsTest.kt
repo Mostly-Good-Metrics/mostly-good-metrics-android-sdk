@@ -137,8 +137,8 @@ class ExperimentsTest {
         assertEquals("Exposure must be deduplicated", 1, exposures.size)
         val properties = exposures.first().properties
         assertNotNull(properties)
-        assertEquals("checkout-flow", properties!!["experiment"]?.toString()?.trim('"'))
-        assertEquals("treatment", properties["variant"]?.toString()?.trim('"'))
+        assertEquals("checkout-flow", properties!!["\$experiment_name"]?.toString()?.trim('"'))
+        assertEquals("treatment", properties["\$variant"]?.toString()?.trim('"'))
 
         sdk.shutdown()
     }

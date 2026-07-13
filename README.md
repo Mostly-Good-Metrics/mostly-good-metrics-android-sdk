@@ -434,7 +434,7 @@ val loaded = MostlyGoodMetrics.ready(timeoutMs = 2_000)
 
 **Behavior:**
 - Reading a variant sets the super property `$experiment_{snake_case(name)}` so the variant is attached to all subsequent events
-- Reading a variant tracks a `$experiment_exposure` event (`experiment`, `variant`) once per user/experiment/variant — the dedup is persisted and survives app restarts
+- Reading a variant tracks a `$experiment_exposure` event (`$experiment_name`, `$variant`) once per user/experiment/variant — the dedup is persisted and survives app restarts
 - After `identify()` with a new user ID, the SDK keeps serving the current variants and refetches assignments for the new user (linking the stored anonymous ID); the new assignments are swapped in atomically when the response arrives
 
 ## Manual Flush

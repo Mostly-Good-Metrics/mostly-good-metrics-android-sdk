@@ -527,8 +527,8 @@ class MostlyGoodMetrics private constructor(
         track(
             "\$experiment_exposure",
             mapOf(
-                "experiment" to experimentName,
-                "variant" to variant
+                "\$experiment_name" to experimentName,
+                "\$variant" to variant
             )
         )
         MGMLogger.debug("Tracked exposure for experiment '$experimentName' variant '$variant'")
