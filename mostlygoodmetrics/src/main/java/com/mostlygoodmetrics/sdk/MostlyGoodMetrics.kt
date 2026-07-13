@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -60,10 +62,24 @@ class MostlyGoodMetrics private constructor(
     private val isFlushing = AtomicBoolean(false)
 
     /**
-     * Cached experiments from the server.
+     * Server-assigned experiment variants (experiment name -> variant) for the
+     * current user. Loaded from the persisted cache at init and refreshed in the
+     * background. Variants are never assigned locally.
      */
-    private var experimentsCache: List<Experiment> = emptyList()
-    private val experimentsLoaded = AtomicBoolean(false)
+    @Volatile
+    private var assignedVariants: Map<String, String> = emptyMap()
+
+    /**
+     * Completes when the initial experiments load attempt finishes
+     * (cache hit, successful fetch, or failed fetch). Never left hanging.
+     */
+    private val experimentsLoadDeferred = CompletableDeferred<Unit>()
+
+    /**
+     * In-memory exposure dedup, mirrored to persistent storage.
+     * Keys are "userId|experiment|variant".
+     */
+    private val trackedExposures = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
      * Current user identifier. Persisted across app launches.
@@ -129,27 +145,87 @@ class MostlyGoodMetrics private constructor(
             trackInstallOrUpdate()
         }
 
-        // Fetch experiments asynchronously
+        // Restore persisted exposure dedup state
+        prefs?.getStringSet(KEY_EXPERIMENT_EXPOSURES, null)?.let { trackedExposures.addAll(it) }
+
+        // Stale-while-revalidate: serve the persisted variant cache immediately
+        // (no expiry), then refresh in the background without ever blocking init.
+        assignedVariants = loadCachedVariants(effectiveUserId)
         fetchExperimentsAsync()
     }
 
     /**
-     * Fetch experiments from the server asynchronously.
+     * Refresh experiment variants from the server in the background.
+     *
+     * Refetches are throttled to roughly once per hour per user (the last fetch
+     * time is persisted). The cached variants are always served in the meantime
+     * and never expire.
      */
     private fun fetchExperimentsAsync() {
+        val userId = effectiveUserId
+        val lastFetchAt = prefs?.getLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, 0L) ?: 0L
+        if (System.currentTimeMillis() - lastFetchAt < EXPERIMENTS_REFETCH_INTERVAL_MS) {
+            MGMLogger.debug("Skipping experiments refetch (throttled), serving cached variants")
+            experimentsLoadDeferred.complete(Unit)
+            return
+        }
+
         scope.launch {
-            val result = networkClient.fetchExperiments()
-            when (result) {
-                is ExperimentsResult.Success -> {
-                    experimentsCache = result.experiments
-                    experimentsLoaded.set(true)
-                    MGMLogger.debug("Loaded ${result.experiments.size} experiments")
-                }
-                is ExperimentsResult.Failure -> {
-                    experimentsLoaded.set(true)
-                    MGMLogger.debug("Failed to load experiments: ${result.error.message}")
-                }
+            try {
+                fetchAndApplyVariants(userId = userId, anonymousId = null)
+            } finally {
+                experimentsLoadDeferred.complete(Unit)
             }
+        }
+    }
+
+    /**
+     * Fetch variants for a user and atomically swap them in on success.
+     * On failure the currently served variants are kept untouched.
+     */
+    private suspend fun fetchAndApplyVariants(userId: String, anonymousId: String?) {
+        when (val result = networkClient.fetchExperiments(userId, anonymousId)) {
+            is ExperimentsResult.Success -> {
+                // Atomic swap: a single volatile write, never a clear-then-set.
+                assignedVariants = result.assignedVariants
+                saveCachedVariants(userId, result.assignedVariants)
+                prefs?.edit()
+                    ?.putLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, System.currentTimeMillis())
+                    ?.apply()
+                MGMLogger.debug("Loaded ${result.assignedVariants.size} assigned variants")
+            }
+            is ExperimentsResult.Failure -> {
+                MGMLogger.debug("Failed to load experiments: ${result.error.message}")
+            }
+        }
+    }
+
+    /**
+     * Load the persisted variant cache for a user. The cache never expires.
+     */
+    private fun loadCachedVariants(userId: String): Map<String, String> {
+        val json = prefs?.getString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, null) ?: return emptyMap()
+        return try {
+            val jsonObject = org.json.JSONObject(json)
+            val variants = mutableMapOf<String, String>()
+            val keys = jsonObject.keys()
+            while (keys.hasNext()) {
+                val name = keys.next()
+                variants[name] = jsonObject.getString(name)
+            }
+            variants
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to parse cached variants: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    private fun saveCachedVariants(userId: String, variants: Map<String, String>) {
+        try {
+            val json = org.json.JSONObject(variants as Map<*, *>).toString()
+            prefs?.edit()?.putString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, json)?.apply()
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to save cached variants: ${e.message}")
         }
     }
 
@@ -204,6 +280,7 @@ class MostlyGoodMetrics private constructor(
      */
     @JvmOverloads
     fun identify(userId: String, profile: UserProfile? = null) {
+        val userChanged = this.userId != userId
         this.userId = userId
         prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
         MGMLogger.info("User identified: $userId")
@@ -211,6 +288,16 @@ class MostlyGoodMetrics private constructor(
         // If profile data is provided, check if we should send $identify event
         if (profile != null && (profile.email != null || profile.name != null)) {
             sendIdentifyEventIfNeeded(userId, profile)
+        }
+
+        // Refetch experiment variants for the new user, linking the stored
+        // anonymous ID so the server can migrate prior anonymous assignments.
+        // The currently served variants stay in place until the response
+        // arrives, then are swapped atomically — never cleared mid-session.
+        if (userChanged) {
+            scope.launch {
+                fetchAndApplyVariants(userId = userId, anonymousId = anonymousId)
+            }
         }
     }
 
@@ -375,58 +462,76 @@ class MostlyGoodMetrics private constructor(
     // region A/B Testing
 
     /**
-     * Get the variant for an A/B test experiment.
+     * Get the server-assigned variant for an A/B test experiment.
      *
-     * The variant assignment is deterministic based on the user ID and experiment name,
-     * so the same user always gets the same variant for a given experiment.
+     * Variants are always assigned by the server — the SDK never buckets locally.
+     * This call is synchronous and non-blocking: it reads from the in-memory
+     * cache (hydrated from persistent storage at init) and returns [fallback]
+     * when the experiment is unknown or assignments have not loaded yet.
+     * It never throws.
      *
-     * The variant is automatically stored as a super property (experiment_{name})
-     * and will be included with all subsequent events.
+     * Reading a variant also:
+     * - sets the super property `$experiment_{snake_case(name)}` so the variant
+     *   is attached to all subsequent events
+     * - tracks a `$experiment_exposure` event once per (user, experiment, variant)
      *
-     * @param experimentName The name/ID of the experiment
-     * @return The assigned variant string (e.g., "a", "b"), or null if experiment not found
+     * @param experimentName The name of the experiment
+     * @param fallback Value returned when no assignment is known (default null)
+     * @return The server-assigned variant, or [fallback]
      */
-    fun getVariant(experimentName: String): String? {
-        // Check if we already have a stored variant for this experiment
-        val propertyKey = "experiment_${toSnakeCase(experimentName)}"
-        val storedVariant = getSuperProperties()[propertyKey] as? String
-        if (storedVariant != null) {
-            return storedVariant
+    @JvmOverloads
+    fun getVariant(experimentName: String, fallback: String? = null): String? {
+        return try {
+            val variant = assignedVariants[experimentName] ?: return fallback
+            recordExposure(experimentName, variant)
+            variant
+        } catch (e: Exception) {
+            MGMLogger.warn("getVariant failed for '$experimentName': ${e.message}")
+            fallback
         }
-
-        // Find the experiment in cache
-        val experiment = experimentsCache.find { it.id == experimentName }
-
-        // If experiment not found in cache, use hash-based fallback with default variants
-        val variants = experiment?.variants ?: listOf("a", "b")
-
-        // Deterministic assignment based on user ID and experiment name
-        val variant = assignVariant(effectiveUserId, experimentName, variants)
-
-        // Store as super property so it's attached to all events
-        setSuperProperty(propertyKey, variant)
-
-        MGMLogger.debug("Assigned variant '$variant' for experiment '$experimentName'")
-
-        return variant
     }
 
     /**
-     * Deterministically assign a variant based on user ID and experiment name.
-     * Uses a simple hash to ensure the same user always gets the same variant.
+     * Suspend until the initial experiments load attempt completes
+     * (success or failure), or until the timeout elapses.
+     *
+     * @param timeoutMs Maximum time to wait, in milliseconds
+     * @return true if the load attempt completed, false if the timeout elapsed
      */
-    private fun assignVariant(userId: String, experimentName: String, variants: List<String>): String {
-        if (variants.isEmpty()) return "a"
+    suspend fun ready(timeoutMs: Long = DEFAULT_READY_TIMEOUT_MS): Boolean {
+        if (experimentsLoadDeferred.isCompleted) return true
+        return withTimeoutOrNull(timeoutMs) {
+            experimentsLoadDeferred.await()
+            true
+        } ?: false
+    }
 
-        val hashInput = "$userId|$experimentName"
-        var hash = 0
-        for (char in hashInput) {
-            hash = ((hash shl 5) - hash) + char.code
+    /**
+     * Set the experiment super property and track the `$experiment_exposure`
+     * event, deduplicated per (user, experiment, variant) and persisted so the
+     * dedup survives app restarts.
+     */
+    private fun recordExposure(experimentName: String, variant: String) {
+        val propertyKey = "\$experiment_${toSnakeCase(experimentName)}"
+        if (getSuperProperties()[propertyKey] != variant) {
+            setSuperProperty(propertyKey, variant)
         }
 
-        // Use absolute value and modulo to pick variant
-        val index = kotlin.math.abs(hash) % variants.size
-        return variants[index]
+        val exposureKey = "$effectiveUserId|$experimentName|$variant"
+        if (!trackedExposures.add(exposureKey)) return
+
+        prefs?.edit()
+            ?.putStringSet(KEY_EXPERIMENT_EXPOSURES, trackedExposures.toSet())
+            ?.apply()
+
+        track(
+            "\$experiment_exposure",
+            mapOf(
+                "experiment" to experimentName,
+                "variant" to variant
+            )
+        )
+        MGMLogger.debug("Tracked exposure for experiment '$experimentName' variant '$variant'")
     }
 
     /**
@@ -647,8 +752,17 @@ class MostlyGoodMetrics private constructor(
         private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val KEY_IDENTIFY_HASH = "identify_hash"
         private const val KEY_IDENTIFY_TIMESTAMP = "identify_timestamp"
+        private const val KEY_EXPERIMENT_VARIANTS_PREFIX = "experiment_variants_"
+        private const val KEY_EXPERIMENTS_LAST_FETCH_PREFIX = "experiments_last_fetch_"
+        private const val KEY_EXPERIMENT_EXPOSURES = "experiment_exposures"
         private const val PLATFORM = "android"
         private const val TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000L
+
+        /** Background refetches of experiment variants are throttled to ~1 hour. */
+        private const val EXPERIMENTS_REFETCH_INTERVAL_MS = 60 * 60 * 1000L
+
+        /** Default timeout for [ready]. */
+        const val DEFAULT_READY_TIMEOUT_MS = 10_000L
 
         /**
          * Generate a random alphanumeric string of the given length.
@@ -870,22 +984,46 @@ class MostlyGoodMetrics private constructor(
         // region A/B Testing (Static)
 
         /**
-         * Get the variant for an A/B test experiment using the shared instance.
+         * Get the server-assigned variant for an A/B test experiment using the
+         * shared instance.
          *
-         * The variant assignment is deterministic based on the user ID and experiment name,
-         * so the same user always gets the same variant for a given experiment.
+         * Synchronous and non-blocking; returns [fallback] when the experiment
+         * is unknown, assignments have not loaded yet, or the SDK is not
+         * configured. Never throws.
          *
-         * @param experimentName The name/ID of the experiment
-         * @return The assigned variant string (e.g., "a", "b"), or null if not configured
+         * @param experimentName The name of the experiment
+         * @param fallback Value returned when no assignment is known (default null)
+         * @return The server-assigned variant, or [fallback]
          */
         @JvmStatic
+        @JvmOverloads
         @JvmName("getVariantStatic")
-        fun getVariant(experimentName: String): String? {
-            return instance?.getVariant(experimentName)
-                ?: run {
-                    MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
-                    null
-                }
+        fun getVariant(experimentName: String, fallback: String? = null): String? {
+            val sdk = instance
+            if (sdk == null) {
+                MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+                return fallback
+            }
+            return sdk.getVariant(experimentName, fallback)
+        }
+
+        /**
+         * Suspend until the initial experiments load attempt completes
+         * (success or failure), or until the timeout elapses.
+         *
+         * @param timeoutMs Maximum time to wait, in milliseconds
+         * @return true if the load attempt completed, false if the timeout
+         *         elapsed or the SDK is not configured
+         */
+        @JvmStatic
+        @JvmName("readyStatic")
+        suspend fun ready(timeoutMs: Long = DEFAULT_READY_TIMEOUT_MS): Boolean {
+            val sdk = instance
+            if (sdk == null) {
+                MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+                return false
+            }
+            return sdk.ready(timeoutMs)
         }
 
         // endregion
@@ -908,14 +1046,15 @@ class MostlyGoodMetrics private constructor(
         internal fun createForTesting(
             configuration: MGMConfiguration,
             storage: EventStorage,
-            networkClient: NetworkClientInterface
+            networkClient: NetworkClientInterface,
+            prefs: SharedPreferences? = null
         ): MostlyGoodMetrics {
             return MostlyGoodMetrics(
                 context = null,
                 configuration = configuration,
                 storage = storage,
                 networkClient = networkClient,
-                prefs = null
+                prefs = prefs
             )
         }
     }

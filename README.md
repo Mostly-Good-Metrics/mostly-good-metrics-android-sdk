@@ -19,6 +19,7 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 - [Event Naming](#event-naming)
 - [Properties](#properties)
 - [Super Properties](#super-properties)
+- [A/B Testing (Experiments)](#ab-testing-experiments)
 - [Manual Flush](#manual-flush)
 - [Debug Logging](#debug-logging)
 - [Java Interop](#java-interop)
@@ -404,6 +405,37 @@ MostlyGoodMetrics.clearSuperProperties()
 - They're included with every tracked event automatically
 - Setting a property with an existing key overwrites the previous value
 - Super properties are merged with event properties (event properties take precedence if keys conflict)
+
+## A/B Testing (Experiments)
+
+Variants are assigned by the MostlyGoodMetrics server — the SDK never buckets users locally. Assignments are fetched in the background at init (never blocking), cached per user in `SharedPreferences` with no expiry, and refreshed at most about once per hour (stale-while-revalidate).
+
+**Read a variant:**
+
+```kotlin
+// Synchronous, never throws, never blocks.
+// Returns the fallback (default null) when the experiment is unknown
+// or assignments haven't loaded yet.
+val variant = MostlyGoodMetrics.getVariant("checkout-flow", fallback = "control")
+
+when (variant) {
+    "treatment" -> showNewCheckout()
+    else -> showOldCheckout()
+}
+```
+
+**Wait for assignments to load (optional):**
+
+```kotlin
+// Suspends until the initial load attempt completes (success or failure),
+// or until the timeout elapses. Never hangs.
+val loaded = MostlyGoodMetrics.ready(timeoutMs = 2_000)
+```
+
+**Behavior:**
+- Reading a variant sets the super property `$experiment_{snake_case(name)}` so the variant is attached to all subsequent events
+- Reading a variant tracks a `$experiment_exposure` event (`experiment`, `variant`) once per user/experiment/variant — the dedup is persisted and survives app restarts
+- After `identify()` with a new user ID, the SDK keeps serving the current variants and refetches assignments for the new user (linking the stored anonymous ID); the new assignments are swapped in atomically when the response arrives
 
 ## Manual Flush
 

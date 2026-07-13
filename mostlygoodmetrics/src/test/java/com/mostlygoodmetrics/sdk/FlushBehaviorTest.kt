@@ -315,9 +315,18 @@ class FlushBehaviorTest {
  */
 class MockNetworkClient(
     private val result: SendResult,
-    private val experimentsResult: ExperimentsResult = ExperimentsResult.Success(emptyList())
+    private val experimentsResult: ExperimentsResult = ExperimentsResult.Success(emptyMap())
 ) : NetworkClientInterface {
     var sendCount = 0
+        private set
+
+    var experimentsFetchCount = 0
+        private set
+
+    var lastExperimentsUserId: String? = null
+        private set
+
+    var lastExperimentsAnonymousId: String? = null
         private set
 
     override suspend fun sendEvents(payload: MGMEventsPayload): SendResult {
@@ -325,7 +334,10 @@ class MockNetworkClient(
         return result
     }
 
-    override suspend fun fetchExperiments(): ExperimentsResult {
+    override suspend fun fetchExperiments(userId: String, anonymousId: String?): ExperimentsResult {
+        experimentsFetchCount++
+        lastExperimentsUserId = userId
+        lastExperimentsAnonymousId = anonymousId
         return experimentsResult
     }
 }
@@ -335,7 +347,7 @@ class MockNetworkClient(
  */
 class SequentialMockNetworkClient(
     private val results: List<SendResult>,
-    private val experimentsResult: ExperimentsResult = ExperimentsResult.Success(emptyList())
+    private val experimentsResult: ExperimentsResult = ExperimentsResult.Success(emptyMap())
 ) : NetworkClientInterface {
     private var callIndex = 0
 
@@ -345,7 +357,7 @@ class SequentialMockNetworkClient(
         return result
     }
 
-    override suspend fun fetchExperiments(): ExperimentsResult {
+    override suspend fun fetchExperiments(userId: String, anonymousId: String?): ExperimentsResult {
         return experimentsResult
     }
 }

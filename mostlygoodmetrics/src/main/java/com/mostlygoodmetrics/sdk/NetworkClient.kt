@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.zip.GZIPOutputStream
 
 /** SDK version for User-Agent header */
@@ -35,27 +36,19 @@ sealed class SendResult {
 }
 
 /**
- * Result of fetching experiments.
+ * Result of fetching experiment variant assignments.
  */
 sealed class ExperimentsResult {
     /**
-     * Successfully fetched experiments.
+     * Successfully fetched server-assigned variants (experiment name -> variant).
      */
-    data class Success(val experiments: List<Experiment>) : ExperimentsResult()
+    data class Success(val assignedVariants: Map<String, String>) : ExperimentsResult()
 
     /**
      * Failed to fetch experiments.
      */
     data class Failure(val error: MGMError) : ExperimentsResult()
 }
-
-/**
- * Represents an A/B test experiment.
- */
-data class Experiment(
-    val id: String,
-    val variants: List<String>
-)
 
 /**
  * Interface for network operations.
@@ -67,9 +60,13 @@ interface NetworkClientInterface {
     suspend fun sendEvents(payload: MGMEventsPayload): SendResult
 
     /**
-     * Fetch active experiments from the API.
+     * Fetch server-assigned experiment variants for a user from the API.
+     *
+     * @param userId The effective user ID (identified user ID or anonymous ID)
+     * @param anonymousId The stored anonymous ID, included when the user is identified
+     *                    so the server can link prior anonymous assignments
      */
-    suspend fun fetchExperiments(): ExperimentsResult
+    suspend fun fetchExperiments(userId: String, anonymousId: String? = null): ExperimentsResult
 }
 
 /**
@@ -234,18 +231,24 @@ class NetworkClient(
     }
 
     /**
-     * Fetch active experiments from the API.
+     * Fetch server-assigned experiment variants for a user from the API.
      */
-    override suspend fun fetchExperiments(): ExperimentsResult = withContext(Dispatchers.IO) {
+    override suspend fun fetchExperiments(userId: String, anonymousId: String?): ExperimentsResult = withContext(Dispatchers.IO) {
         var connection: HttpURLConnection? = null
         try {
-            val url = URL("${configuration.baseUrl}/v1/experiments")
+            val query = buildString {
+                append("user_id=").append(URLEncoder.encode(userId, "UTF-8"))
+                if (anonymousId != null) {
+                    append("&anonymous_id=").append(URLEncoder.encode(anonymousId, "UTF-8"))
+                }
+            }
+            val url = URL("${configuration.baseUrl}/v1/experiments?$query")
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
 
-                setRequestProperty("X-MGM-Key", configuration.apiKey)
+                setRequestProperty("Authorization", "Bearer ${configuration.apiKey}")
                 setRequestProperty("User-Agent", buildUserAgent())
                 setRequestProperty("Accept", "application/json")
 
@@ -276,9 +279,9 @@ class NetworkClient(
             when (statusCode) {
                 200 -> {
                     try {
-                        val experiments = parseExperimentsResponse(body)
-                        MGMLogger.debug("Fetched ${experiments.size} experiments")
-                        ExperimentsResult.Success(experiments)
+                        val assignedVariants = parseExperimentsResponse(body)
+                        MGMLogger.debug("Fetched ${assignedVariants.size} assigned variants")
+                        ExperimentsResult.Success(assignedVariants)
                     } catch (e: Exception) {
                         MGMLogger.error("Failed to parse experiments response", e)
                         ExperimentsResult.Failure(MGMError.EncodingError(e))
@@ -306,23 +309,19 @@ class NetworkClient(
 
     /**
      * Parse the experiments JSON response.
-     * Expected format: { "experiments": [{ "id": "...", "variants": ["a", "b"] }] }
+     * Only `assigned_variants` is consumed — variants are always assigned server-side.
+     * Expected format: { "assigned_variants": { "experiment-name": "variant" } }
      */
-    private fun parseExperimentsResponse(jsonString: String): List<Experiment> {
+    private fun parseExperimentsResponse(jsonString: String): Map<String, String> {
         val jsonObject = org.json.JSONObject(jsonString)
-        val experimentsArray = jsonObject.optJSONArray("experiments") ?: return emptyList()
+        val assignedVariants = jsonObject.optJSONObject("assigned_variants") ?: return emptyMap()
 
-        val experiments = mutableListOf<Experiment>()
-        for (i in 0 until experimentsArray.length()) {
-            val expObj = experimentsArray.getJSONObject(i)
-            val id = expObj.getString("id")
-            val variantsArray = expObj.getJSONArray("variants")
-            val variants = mutableListOf<String>()
-            for (j in 0 until variantsArray.length()) {
-                variants.add(variantsArray.getString(j))
-            }
-            experiments.add(Experiment(id = id, variants = variants))
+        val variants = mutableMapOf<String, String>()
+        val keys = assignedVariants.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            variants[name] = assignedVariants.getString(name)
         }
-        return experiments
+        return variants
     }
 }
