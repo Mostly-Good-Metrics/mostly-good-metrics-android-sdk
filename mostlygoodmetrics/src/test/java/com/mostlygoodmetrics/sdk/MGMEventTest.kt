@@ -79,9 +79,15 @@ class MGMEventTest {
     }
 
     @Test
-    fun `isValidEventName rejects names with space`() {
-        assertFalse(MGMEvent.isValidEventName("event name"))
-        assertFalse(MGMEvent.isValidEventName("my event"))
+    fun `isValidEventName accepts names with spaces`() {
+        assertTrue(MGMEvent.isValidEventName("event name"))
+        assertTrue(MGMEvent.isValidEventName("my event"))
+        assertTrue(MGMEvent.isValidEventName("Button Clicked"))
+        assertTrue(MGMEvent.isValidEventName("User Signed Up"))
+    }
+
+    @Test
+    fun `isValidEventName rejects names with leading or trailing spaces`() {
         assertFalse(MGMEvent.isValidEventName(" event"))
         assertFalse(MGMEvent.isValidEventName("event "))
     }

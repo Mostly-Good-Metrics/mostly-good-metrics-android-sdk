@@ -32,7 +32,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run Unit Tests
-        run: ./gradlew :mostlygoodmetrics:test
+        run: ./gradlew :mostlygoodmetrics:testDebugUnitTest :mostlygoodmetrics:jacocoTestReport
 
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
@@ -40,6 +40,16 @@ jobs:
         with:
           name: test-results
           path: mostlygoodmetrics/build/reports/tests/
+
+      - name: Upload coverage to Covallaby
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          URL="https://app.covallaby.com/api/v1/upload?repo=${{ github.repository }}&branch=${{ github.head_ref || github.ref_name }}&commit=${{ github.event.pull_request.head.sha || github.sha }}"
+          [ -n "${{ github.event.pull_request.number }}" ] && URL="${URL}&pr=${{ github.event.pull_request.number }}"
+          curl -sf -X POST "$URL" \
+            -H "Authorization: Bearer ${{ secrets.COVALLABY_TOKEN }}" \
+            --data-binary @mostlygoodmetrics/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
 
   build:
     name: Build

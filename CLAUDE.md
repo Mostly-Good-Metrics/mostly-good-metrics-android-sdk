@@ -47,3 +47,34 @@ Public APIs include:
 - Public class/struct names and their public properties
 - Configuration options
 - Event names and property keys sent to the server
+
+### 5. Releasing
+
+**Always use Fastlane for releases** - it generates proper release notes via Claude.
+
+Setup (one time):
+```
+bundle install
+```
+
+To release:
+```
+bundle exec fastlane release
+```
+
+This will:
+1. Prompt for version bump type (patch/minor/major)
+2. Generate release notes from merged PRs
+3. Create a version bump PR and output the PR URL
+
+After Fastlane completes:
+1. Monitor the PR checks with `gh pr checks <PR_NUMBER>`
+2. When all checks pass, merge with `gh pr merge <PR_NUMBER> --squash --delete-branch`
+3. CI automatically publishes to JitPack and creates a GitHub release
+
+**DO NOT:**
+- Manually edit version in `build.gradle` or `gradle.properties`
+- Manually publish to JitPack/Maven
+- Create version tags manually
+
+Fastlane and CI handle all versioning and publishing automatically.

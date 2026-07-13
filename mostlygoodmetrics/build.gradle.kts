@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     `maven-publish`
+    jacoco
 }
 
 android {
@@ -43,6 +44,39 @@ android {
     }
 }
 
+// Coverage report for Covallaby (JaCoCo XML).
+// Best-effort wiring — see the Covallaby PR notes. Module/task/path names may
+// need maintainer adjustment.
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+
+    val fileFilter = listOf(
+        "**/R.class",
+        "**/R\$*.class",
+        "**/BuildConfig.*",
+        "**/Manifest*.*",
+        "**/*Test*.*",
+        "android/**/*.*"
+    )
+
+    val debugTree = fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {
+        exclude(fileFilter)
+    }
+
+    classDirectories.setFrom(debugTree)
+    sourceDirectories.setFrom(files("$projectDir/src/main/java"))
+    executionData.setFrom(
+        fileTree(layout.buildDirectory.get()) {
+            include("**/*.exec", "**/*.ec")
+        }
+    )
+}
+
 dependencies {
     // Kotlin
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
@@ -65,7 +99,7 @@ publishing {
         register<MavenPublication>("release") {
             groupId = "com.mostlygoodmetrics"
             artifactId = "sdk"
-            version = "0.2.4"
+            version = "0.2.6"
 
             afterEvaluate {
                 from(components["release"])

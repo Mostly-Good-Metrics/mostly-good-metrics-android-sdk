@@ -46,8 +46,8 @@ data class MGMEvent(
         private const val MAX_PROPERTIES_DEPTH = 3
         private const val MAX_PROPERTIES_SIZE_BYTES = 10 * 1024 // 10KB
 
-        // Regex pattern: starts with letter (or $ for system events), followed by alphanumeric/underscore
-        private val EVENT_NAME_PATTERN = Regex("^\\\$?[a-zA-Z][a-zA-Z0-9_]*$")
+        // Regex pattern: starts with letter (or $ for system events), allows spaces between words.
+        private val EVENT_NAME_PATTERN = Regex("^\\$?[a-zA-Z](?:[a-zA-Z0-9_ ]*[a-zA-Z0-9_])?$")
 
         private val iso8601Format: SimpleDateFormat
             get() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
