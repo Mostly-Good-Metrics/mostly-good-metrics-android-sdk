@@ -172,7 +172,13 @@ class MostlyGoodMetrics private constructor(
 
         scope.launch {
             try {
-                fetchAndApplyVariants(userId = userId, anonymousId = null)
+                // Link the stored anonymous ID whenever the effective user ID
+                // differs from it (i.e. the user is identified), so the server
+                // can migrate prior anonymous assignments on every fetch.
+                fetchAndApplyVariants(
+                    userId = userId,
+                    anonymousId = anonymousId.takeIf { it != userId }
+                )
             } finally {
                 experimentsLoadDeferred.complete(Unit)
             }
@@ -536,12 +542,21 @@ class MostlyGoodMetrics private constructor(
 
     /**
      * Convert a string to snake_case.
+     *
+     * Byte-for-byte port of the JS SDK's transform:
+     * 1. insert `_` before every uppercase letter
+     * 2. replace runs of hyphens/whitespace with a single `_`
+     * 3. lowercase
+     * 4. strip one leading `_`
+     *
+     * Other punctuation is left untouched.
      */
     private fun toSnakeCase(input: String): String {
         return input
-            .replace(Regex("([a-z])([A-Z])")) { "${it.groupValues[1]}_${it.groupValues[2]}" }
-            .replace(Regex("[^a-zA-Z0-9]"), "_")
+            .replace(Regex("([A-Z])"), "_$1")
+            .replace(Regex("[-\\s]+"), "_")
             .lowercase()
+            .replaceFirst(Regex("^_"), "")
     }
 
     // endregion
@@ -762,7 +777,7 @@ class MostlyGoodMetrics private constructor(
         private const val EXPERIMENTS_REFETCH_INTERVAL_MS = 60 * 60 * 1000L
 
         /** Default timeout for [ready]. */
-        const val DEFAULT_READY_TIMEOUT_MS = 10_000L
+        const val DEFAULT_READY_TIMEOUT_MS = 5_000L
 
         /**
          * Generate a random alphanumeric string of the given length.

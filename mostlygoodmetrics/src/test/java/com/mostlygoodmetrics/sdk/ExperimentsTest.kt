@@ -117,6 +117,38 @@ class ExperimentsTest {
         sdk.shutdown()
     }
 
+    @Test
+    fun `snake_case transform matches the JS reference byte-for-byte`() {
+        val cases = mapOf(
+            "Pricing-Test V2" to "pricing__test__v2",
+            "A-B-Test" to "a__b__test",
+            "ABTest" to "a_b_test",
+            "button-color" to "button_color",
+            "myExperiment2" to "my_experiment2",
+            "a--b" to "a_b"
+        )
+        val network = ControllableExperimentsNetworkClient(
+            ExperimentsResult.Success(cases.keys.associateWith { "treatment" })
+        )
+        val sdk = createSdk(network, FakeSharedPreferences())
+        assertTrue(awaitReady(sdk))
+
+        cases.forEach { (name, expectedSnake) ->
+            assertEquals("treatment", sdk.getVariant(name))
+            assertEquals(
+                "snake_case(\"$name\") must produce \"$expectedSnake\"",
+                "treatment",
+                sdk.getSuperProperties()["\$experiment_$expectedSnake"]
+            )
+        }
+
+        // No extra experiment super properties from a divergent transform
+        val experimentKeys = sdk.getSuperProperties().keys.filter { it.startsWith("\$experiment_") }
+        assertEquals(cases.size, experimentKeys.size)
+
+        sdk.shutdown()
+    }
+
     // endregion
 
     // region Exposure tracking + dedup
@@ -289,6 +321,11 @@ class ExperimentsTest {
         sdk.shutdown()
     }
 
+    @Test
+    fun `ready default timeout is 5 seconds`() {
+        assertEquals(5_000L, MostlyGoodMetrics.DEFAULT_READY_TIMEOUT_MS)
+    }
+
     // endregion
 
     // region identify(): refetch + atomic swap
@@ -342,6 +379,28 @@ class ExperimentsTest {
             "anon-variant",
             sdk.getVariant("checkout-flow")
         )
+
+        sdk.shutdown()
+    }
+
+    @Test
+    fun `background refetch includes anonymous_id while identified`() {
+        val prefs = FakeSharedPreferences()
+        val anonymousId = "\$anon_identifiedbg"
+        prefs.edit()
+            .putString("anonymous_id", anonymousId)
+            .putString("user_id", "user-123")
+            .apply()
+
+        val network = ControllableExperimentsNetworkClient(
+            ExperimentsResult.Success(mapOf("checkout-flow" to "treatment"))
+        )
+        val sdk = createSdk(network, prefs)
+        assertTrue(awaitReady(sdk))
+
+        // Every fetch while identified links the stored anonymous ID,
+        // not only the identify()-triggered refetch.
+        assertEquals("user-123" to anonymousId, network.fetchCalls.first())
 
         sdk.shutdown()
     }
