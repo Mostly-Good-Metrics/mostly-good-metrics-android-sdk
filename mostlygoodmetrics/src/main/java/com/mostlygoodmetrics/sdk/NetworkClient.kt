@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.zip.GZIPOutputStream
 
 /** SDK version for User-Agent header */
@@ -35,6 +36,21 @@ sealed class SendResult {
 }
 
 /**
+ * Result of fetching experiment variant assignments.
+ */
+sealed class ExperimentsResult {
+    /**
+     * Successfully fetched server-assigned variants (experiment name -> variant).
+     */
+    data class Success(val assignedVariants: Map<String, String>) : ExperimentsResult()
+
+    /**
+     * Failed to fetch experiments.
+     */
+    data class Failure(val error: MGMError) : ExperimentsResult()
+}
+
+/**
  * Interface for network operations.
  */
 interface NetworkClientInterface {
@@ -42,6 +58,15 @@ interface NetworkClientInterface {
      * Send events to the API.
      */
     suspend fun sendEvents(payload: MGMEventsPayload): SendResult
+
+    /**
+     * Fetch server-assigned experiment variants for a user from the API.
+     *
+     * @param userId The effective user ID (identified user ID or anonymous ID)
+     * @param anonymousId The stored anonymous ID, included when the user is identified
+     *                    so the server can link prior anonymous assignments
+     */
+    suspend fun fetchExperiments(userId: String, anonymousId: String? = null): ExperimentsResult
 }
 
 /**
@@ -203,5 +228,100 @@ class NetworkClient(
     private fun buildUserAgent(): String {
         val osVersion = Build.VERSION.RELEASE ?: "unknown"
         return "MostlyGoodMetrics/$SDK_VERSION (Android; OS $osVersion)"
+    }
+
+    /**
+     * Fetch server-assigned experiment variants for a user from the API.
+     */
+    override suspend fun fetchExperiments(userId: String, anonymousId: String?): ExperimentsResult = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val query = buildString {
+                append("user_id=").append(URLEncoder.encode(userId, "UTF-8"))
+                if (anonymousId != null) {
+                    append("&anonymous_id=").append(URLEncoder.encode(anonymousId, "UTF-8"))
+                }
+            }
+            val url = URL("${configuration.baseUrl}/v1/experiments?$query")
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+
+                setRequestProperty("Authorization", "Bearer ${configuration.apiKey}")
+                setRequestProperty("User-Agent", buildUserAgent())
+                setRequestProperty("Accept", "application/json")
+
+                // SDK identification headers
+                setRequestProperty("X-MGM-SDK", "android")
+                setRequestProperty("X-MGM-SDK-Version", SDK_VERSION)
+
+                configuration.packageName?.let {
+                    setRequestProperty("X-MGM-Bundle-Id", it)
+                }
+            }
+
+            MGMLogger.debug("Fetching experiments from ${configuration.baseUrl}/v1/experiments")
+
+            val statusCode = connection.responseCode
+            val body = try {
+                if (statusCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+            } catch (e: Exception) {
+                ""
+            }
+
+            MGMLogger.debug("Experiments response: $statusCode - $body")
+
+            when (statusCode) {
+                200 -> {
+                    try {
+                        val assignedVariants = parseExperimentsResponse(body)
+                        MGMLogger.debug("Fetched ${assignedVariants.size} assigned variants")
+                        ExperimentsResult.Success(assignedVariants)
+                    } catch (e: Exception) {
+                        MGMLogger.error("Failed to parse experiments response", e)
+                        ExperimentsResult.Failure(MGMError.EncodingError(e))
+                    }
+                }
+                401 -> {
+                    MGMLogger.warn("Unauthorized - invalid API key")
+                    ExperimentsResult.Failure(MGMError.Unauthorized)
+                }
+                else -> {
+                    MGMLogger.warn("Failed to fetch experiments: $statusCode")
+                    ExperimentsResult.Failure(MGMError.UnexpectedStatusCode(statusCode))
+                }
+            }
+        } catch (e: IOException) {
+            MGMLogger.error("Network error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.NetworkError(e))
+        } catch (e: Exception) {
+            MGMLogger.error("Error fetching experiments", e)
+            ExperimentsResult.Failure(MGMError.EncodingError(e))
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * Parse the experiments JSON response.
+     * Only `assigned_variants` is consumed — variants are always assigned server-side.
+     * Expected format: { "assigned_variants": { "experiment-name": "variant" } }
+     */
+    private fun parseExperimentsResponse(jsonString: String): Map<String, String> {
+        val jsonObject = org.json.JSONObject(jsonString)
+        val assignedVariants = jsonObject.optJSONObject("assigned_variants") ?: return emptyMap()
+
+        val variants = mutableMapOf<String, String>()
+        val keys = assignedVariants.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            variants[name] = assignedVariants.getString(name)
+        }
+        return variants
     }
 }
