@@ -21,6 +21,7 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 - [Super Properties](#super-properties)
 - [A/B Testing (Experiments)](#ab-testing-experiments)
 - [Manual Flush](#manual-flush)
+- [Privacy](#privacy)
 - [Debug Logging](#debug-logging)
 - [Java Interop](#java-interop)
 - [ProGuard / R8](#proguard--r8)
@@ -189,6 +190,8 @@ MostlyGoodMetrics.configure(this, config)
 | `maxStoredEvents` | `10000` | Max cached events |
 | `enableDebugLogging` | `false` | Enable logcat output |
 | `trackAppLifecycleEvents` | `true` | Auto-track lifecycle events |
+| `optedOutByDefault` | `false` | Start opted out until `optIn()` is called (consent-first apps) |
+| `collectDeviceProperties` | `true` | Collect device model/type, manufacturer, locale, timezone |
 
 ## User Identification
 
@@ -451,6 +454,72 @@ MostlyGoodMetrics.flush { result ->
     }
 }
 ```
+
+## Privacy
+
+The SDK is designed to collect the minimum needed for product analytics — and to make it easy to collect even less.
+
+**What is auto-collected:**
+
+Every event includes platform, OS version, app version/build number, environment, session ID, a user ID (your `identify()` value or a random anonymous ID), and — unless disabled — device model, device type (phone/tablet), device manufacturer, locale, and timezone. See [Automatic Context](#automatic-context) for the full list.
+
+**What is never collected:** the SDK never accesses the Advertising ID (AAID), location, contacts, or any other personal data from the device. `identify()` is entirely optional — without it, users are tracked only under a random, resettable anonymous ID (`$anon_xxxxxxxxxxxx`).
+
+### Opt-out / opt-in
+
+Let users opt out of analytics entirely:
+
+```kotlin
+MostlyGoodMetrics.optOut()   // stops tracking immediately, purges queued events
+MostlyGoodMetrics.optIn()    // re-enables tracking
+MostlyGoodMetrics.isOptedOut // current state
+```
+
+Opting out takes effect immediately: `track()`, `identify()`, and `flush()` become no-ops, any queued (unsent) events are deleted, and the choice is persisted across app restarts.
+
+For consent-first apps (e.g., GDPR), start opted out and only begin tracking after consent:
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .optedOutByDefault(true)
+    .build()
+MostlyGoodMetrics.configure(this, config)
+
+// Later, once the user consents:
+MostlyGoodMetrics.optIn()
+```
+
+A persisted opt-in/opt-out choice always wins over `optedOutByDefault` on subsequent launches.
+
+### Rotating the anonymous ID
+
+Rotate the anonymous ID at any time so future events can't be linked to prior activity:
+
+```kotlin
+MostlyGoodMetrics.resetAnonymousId()
+```
+
+### Full "forget me"
+
+`resetIdentity()` clears the user ID (see [User Identification](#user-identification)). Pass `clearAnonymousId = true` for a full reset — for example, when a user asks to be forgotten:
+
+```kotlin
+MostlyGoodMetrics.resetIdentity(clearAnonymousId = true)
+```
+
+This clears the user ID, rotates the anonymous ID, purges all pending (unsent) events and super properties, and starts a new session.
+
+### Reducing device data collection
+
+Disable device-level properties if you don't need them:
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .collectDeviceProperties(false)
+    .build()
+```
+
+When disabled, events omit `$device_model`, `$device_type`, `device_manufacturer`, `locale`, and `timezone`. Platform, OS version, and app version are still included.
 
 ## Debug Logging
 

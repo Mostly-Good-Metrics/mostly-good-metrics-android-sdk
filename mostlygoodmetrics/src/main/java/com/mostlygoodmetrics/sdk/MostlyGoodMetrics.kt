@@ -62,6 +62,13 @@ class MostlyGoodMetrics private constructor(
     private val isFlushing = AtomicBoolean(false)
 
     /**
+     * Whether the user has opted out of tracking. Persisted across app launches.
+     * Restored before any automatic events fire so an opted-out user never
+     * generates traffic.
+     */
+    private val optedOut = AtomicBoolean(false)
+
+    /**
      * Server-assigned experiment variants (experiment name -> variant) for the
      * current user. Loaded from the persisted cache at init and refreshed in the
      * background. Variants are never assigned locally.
@@ -118,9 +125,21 @@ class MostlyGoodMetrics private constructor(
     val isFlushingEvents: Boolean
         get() = isFlushing.get()
 
+    /**
+     * Whether the user is currently opted out of tracking.
+     * See [optOut] and [optIn].
+     */
+    val isOptedOut: Boolean
+        get() = optedOut.get()
+
     init {
         MGMLogger.isEnabled = configuration.enableDebugLogging
         MGMLogger.info("Initializing MostlyGoodMetrics SDK")
+
+        // Restore opt-out state before anything can track or send. A persisted
+        // choice wins; otherwise fall back to the configured default.
+        optedOut.set(prefs?.getBoolean(KEY_OPTED_OUT, configuration.optedOutByDefault)
+            ?: configuration.optedOutByDefault)
 
         // Restore user ID
         userId = prefs?.getString(KEY_USER_ID, null)
@@ -162,6 +181,12 @@ class MostlyGoodMetrics private constructor(
      * and never expire.
      */
     private fun fetchExperimentsAsync() {
+        if (isOptedOut) {
+            MGMLogger.debug("User opted out, skipping experiments fetch")
+            experimentsLoadDeferred.complete(Unit)
+            return
+        }
+
         val userId = effectiveUserId
         val lastFetchAt = prefs?.getLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, 0L) ?: 0L
         if (System.currentTimeMillis() - lastFetchAt < EXPERIMENTS_REFETCH_INTERVAL_MS) {
@@ -243,6 +268,11 @@ class MostlyGoodMetrics private constructor(
      * @param properties Optional map of custom properties.
      */
     fun track(name: String, properties: Map<String, Any?>? = null) {
+        if (isOptedOut) {
+            MGMLogger.debug("User opted out, dropping event: $name")
+            return
+        }
+
         if (!MGMEvent.isValidEventName(name)) {
             MGMLogger.warn("Invalid event name: $name")
             return
@@ -286,6 +316,11 @@ class MostlyGoodMetrics private constructor(
      */
     @JvmOverloads
     fun identify(userId: String, profile: UserProfile? = null) {
+        if (isOptedOut) {
+            MGMLogger.debug("User opted out, ignoring identify")
+            return
+        }
+
         val userChanged = this.userId != userId
         this.userId = userId
         prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
@@ -365,13 +400,64 @@ class MostlyGoodMetrics private constructor(
 
     /**
      * Reset the user identity. Clears the persisted user ID and identify debounce state.
+     *
+     * @param clearAnonymousId When true, performs a full "forget me": also rotates
+     *        the persisted anonymous ID, purges pending (unsent) events, clears all
+     *        super properties, and starts a new session. Default false, which keeps
+     *        the existing behavior (events continue with the current anonymous ID).
      */
-    fun resetIdentity() {
+    @JvmOverloads
+    fun resetIdentity(clearAnonymousId: Boolean = false) {
         userId = null
         prefs?.edit()?.remove(KEY_USER_ID)?.apply()
         clearIdentifyState()
+
+        if (clearAnonymousId) {
+            resetAnonymousId()
+            clearPendingEvents()
+            clearSuperProperties()
+            startNewSession()
+        }
+
         MGMLogger.info("User identity reset")
     }
+
+    /**
+     * Rotate the anonymous ID. Generates a new persisted anonymous ID; subsequent
+     * events from an unidentified user can no longer be linked to prior activity.
+     */
+    fun resetAnonymousId() {
+        val newId = generateAnonymousId()
+        anonymousId = newId
+        prefs?.edit()?.putString(KEY_ANONYMOUS_ID, newId)?.apply()
+        MGMLogger.info("Anonymous ID reset")
+    }
+
+    // region Privacy
+
+    /**
+     * Opt the user out of all tracking. Takes effect immediately:
+     * [track], [identify], and [flush] become no-ops, pending (unsent) events
+     * are purged, and the choice is persisted across app launches until
+     * [optIn] is called.
+     */
+    fun optOut() {
+        optedOut.set(true)
+        prefs?.edit()?.putBoolean(KEY_OPTED_OUT, true)?.apply()
+        storage.clear()
+        MGMLogger.info("User opted out of tracking; pending events purged")
+    }
+
+    /**
+     * Opt the user back in to tracking. Persisted across app launches.
+     */
+    fun optIn() {
+        optedOut.set(false)
+        prefs?.edit()?.putBoolean(KEY_OPTED_OUT, false)?.apply()
+        MGMLogger.info("User opted in to tracking")
+    }
+
+    // endregion
 
     /**
      * Start a new session. Generates a new session ID.
@@ -567,6 +653,12 @@ class MostlyGoodMetrics private constructor(
      * @param completion Optional callback when flush completes.
      */
     fun flush(completion: ((Result<Unit>) -> Unit)? = null) {
+        if (isOptedOut) {
+            MGMLogger.debug("User opted out, skipping flush")
+            completion?.invoke(Result.success(Unit))
+            return
+        }
+
         scope.launch {
             flushInternal()
             completion?.invoke(Result.success(Unit))
@@ -582,6 +674,10 @@ class MostlyGoodMetrics private constructor(
     }
 
     private suspend fun flushInternal() {
+        if (isOptedOut) {
+            return
+        }
+
         if (!isFlushing.compareAndSet(false, true)) {
             MGMLogger.debug("Flush already in progress, skipping")
             return
@@ -682,11 +778,13 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun buildProperties(userProperties: Map<String, Any?>?): Map<String, Any?> {
-        val systemProperties = mapOf(
-            "\$device_type" to getDeviceType(),
-            "\$device_model" to (Build.MODEL ?: "unknown"),
+        val systemProperties = mutableMapOf<String, Any?>(
             "\$sdk" to (configuration.wrapperName ?: "android")
         )
+        if (configuration.collectDeviceProperties) {
+            systemProperties["\$device_type"] = getDeviceType()
+            systemProperties["\$device_model"] = Build.MODEL ?: "unknown"
+        }
 
         // Merge properties: super properties < user properties < system properties
         // User properties override super properties, system properties are always added
@@ -738,15 +836,18 @@ class MostlyGoodMetrics private constructor(
         return if (widthDp >= 600) "tablet" else "phone"
     }
 
-    private fun getDeviceManufacturer(): String {
+    private fun getDeviceManufacturer(): String? {
+        if (!configuration.collectDeviceProperties) return null
         return Build.MANUFACTURER ?: "unknown"
     }
 
-    private fun getLocale(): String {
+    private fun getLocale(): String? {
+        if (!configuration.collectDeviceProperties) return null
         return java.util.Locale.getDefault().toString()
     }
 
-    private fun getTimezone(): String {
+    private fun getTimezone(): String? {
+        if (!configuration.collectDeviceProperties) return null
         return java.util.TimeZone.getDefault().id
     }
 
@@ -763,6 +864,7 @@ class MostlyGoodMetrics private constructor(
         private const val PREFS_NAME = "mostly_good_metrics"
         private const val KEY_USER_ID = "user_id"
         private const val KEY_ANONYMOUS_ID = "anonymous_id"
+        private const val KEY_OPTED_OUT = "opted_out"
         private const val KEY_APP_VERSION = "app_version"
         private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val KEY_IDENTIFY_HASH = "identify_hash"
@@ -844,6 +946,8 @@ class MostlyGoodMetrics private constructor(
                         .maxStoredEvents(configuration.maxStoredEvents)
                         .enableDebugLogging(configuration.enableDebugLogging)
                         .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
+                        .optedOutByDefault(configuration.optedOutByDefault)
+                        .collectDeviceProperties(configuration.collectDeviceProperties)
                         .wrapperName(configuration.wrapperName)
                         .wrapperVersion(configuration.wrapperVersion)
                         .build()
@@ -883,13 +987,58 @@ class MostlyGoodMetrics private constructor(
 
         /**
          * Reset user identity using the shared instance.
+         *
+         * @param clearAnonymousId When true, also rotates the anonymous ID, purges
+         *        pending events, clears super properties, and starts a new session.
          */
         @JvmStatic
+        @JvmOverloads
         @JvmName("resetUserIdentity")
-        fun resetIdentity() {
-            instance?.resetIdentity()
+        fun resetIdentity(clearAnonymousId: Boolean = false) {
+            instance?.resetIdentity(clearAnonymousId)
                 ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
         }
+
+        /**
+         * Rotate the anonymous ID using the shared instance.
+         */
+        @JvmStatic
+        @JvmName("resetAnonymousIdStatic")
+        fun resetAnonymousId() {
+            instance?.resetAnonymousId()
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Opt the user out of all tracking using the shared instance.
+         * See [MostlyGoodMetrics.optOut].
+         */
+        @JvmStatic
+        @JvmName("optOutStatic")
+        fun optOut() {
+            instance?.optOut()
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Opt the user back in to tracking using the shared instance.
+         * See [MostlyGoodMetrics.optIn].
+         */
+        @JvmStatic
+        @JvmName("optInStatic")
+        fun optIn() {
+            instance?.optIn()
+                ?: MGMLogger.warn("MostlyGoodMetrics not configured. Call configure() first.")
+        }
+
+        /**
+         * Whether the user is currently opted out of tracking on the shared instance.
+         * Returns false when the SDK is not configured.
+         */
+        @JvmStatic
+        @get:JvmName("getCurrentIsOptedOut")
+        val isOptedOut: Boolean
+            get() = instance?.isOptedOut ?: false
 
         /**
          * Flush pending events using the shared instance.
