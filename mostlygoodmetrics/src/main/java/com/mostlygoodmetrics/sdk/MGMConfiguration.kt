@@ -14,6 +14,8 @@ class MGMConfiguration private constructor(
     val maxStoredEvents: Int,
     val enableDebugLogging: Boolean,
     val trackAppLifecycleEvents: Boolean,
+    val optedOutByDefault: Boolean,
+    val collectDeviceProperties: Boolean,
     val wrapperName: String?,
     val wrapperVersion: String?
 ) {
@@ -31,6 +33,8 @@ class MGMConfiguration private constructor(
         private var maxStoredEvents: Int = DEFAULT_MAX_STORED_EVENTS
         private var enableDebugLogging: Boolean = false
         private var trackAppLifecycleEvents: Boolean = true
+        private var optedOutByDefault: Boolean = false
+        private var collectDeviceProperties: Boolean = true
         private var wrapperName: String? = null
         private var wrapperVersion: String? = null
 
@@ -97,6 +101,28 @@ class MGMConfiguration private constructor(
         }
 
         /**
+         * Start the SDK in the opted-out state until the user explicitly opts in.
+         * Useful for consent-first apps (e.g., GDPR): no events are tracked or
+         * sent until [MostlyGoodMetrics.optIn] is called. A persisted opt-in or
+         * opt-out choice always takes precedence over this default.
+         * Default: false
+         */
+        fun optedOutByDefault(optedOut: Boolean) = apply {
+            this.optedOutByDefault = optedOut
+        }
+
+        /**
+         * Enable or disable collection of device-level properties.
+         * When disabled, events omit `$device_model`, `$device_type`,
+         * `device_manufacturer`, `locale`, and `timezone`. Platform, OS version,
+         * and app version are always included.
+         * Default: true
+         */
+        fun collectDeviceProperties(collect: Boolean) = apply {
+            this.collectDeviceProperties = collect
+        }
+
+        /**
          * Set the wrapper SDK name (e.g., "react-native", "flutter", "expo").
          * Used by hybrid framework SDKs to identify themselves.
          * Default: null (no wrapper)
@@ -130,6 +156,8 @@ class MGMConfiguration private constructor(
                 maxStoredEvents = maxStoredEvents,
                 enableDebugLogging = enableDebugLogging,
                 trackAppLifecycleEvents = trackAppLifecycleEvents,
+                optedOutByDefault = optedOutByDefault,
+                collectDeviceProperties = collectDeviceProperties,
                 wrapperName = wrapperName,
                 wrapperVersion = wrapperVersion
             )
