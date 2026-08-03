@@ -17,7 +17,9 @@ class MGMConfiguration private constructor(
     val optedOutByDefault: Boolean,
     val collectDeviceProperties: Boolean,
     val wrapperName: String?,
-    val wrapperVersion: String?
+    val wrapperVersion: String?,
+    val experimentMode: MGMExperimentMode,
+    val localExperiments: List<MGMExperimentConfig>
 ) {
     /**
      * Builder for creating [MGMConfiguration] instances.
@@ -37,6 +39,8 @@ class MGMConfiguration private constructor(
         private var collectDeviceProperties: Boolean = true
         private var wrapperName: String? = null
         private var wrapperVersion: String? = null
+        private var experimentMode: MGMExperimentMode = MGMExperimentMode.SERVER
+        private var localExperiments: List<MGMExperimentConfig> = emptyList()
 
         /**
          * Set the base URL for the API endpoint.
@@ -141,6 +145,31 @@ class MGMConfiguration private constructor(
         }
 
         /**
+         * Set how experiment variants are assigned.
+         *
+         * [MGMExperimentMode.SERVER] (the default) fetches server-assigned
+         * variants. [MGMExperimentMode.LOCAL] buckets deterministically on
+         * device from experiment configs — no per-user assignment request
+         * ever leaves the device.
+         * Default: [MGMExperimentMode.SERVER]
+         */
+        fun experimentMode(mode: MGMExperimentMode) = apply {
+            this.experimentMode = mode
+        }
+
+        /**
+         * Supply experiment configs inline for [MGMExperimentMode.LOCAL].
+         *
+         * When set (together with `experimentMode(MGMExperimentMode.LOCAL)`),
+         * the SDK buckets on device from these configs and performs no
+         * experiments network fetch at all.
+         * Default: empty (LOCAL mode fetches configs from the server)
+         */
+        fun localExperiments(experiments: List<MGMExperimentConfig>) = apply {
+            this.localExperiments = experiments.toList()
+        }
+
+        /**
          * Build the configuration instance.
          */
         fun build(): MGMConfiguration {
@@ -159,7 +188,9 @@ class MGMConfiguration private constructor(
                 optedOutByDefault = optedOutByDefault,
                 collectDeviceProperties = collectDeviceProperties,
                 wrapperName = wrapperName,
-                wrapperVersion = wrapperVersion
+                wrapperVersion = wrapperVersion,
+                experimentMode = experimentMode,
+                localExperiments = localExperiments
             )
         }
     }
