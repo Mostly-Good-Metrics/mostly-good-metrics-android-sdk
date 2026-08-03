@@ -70,6 +70,14 @@ class MostlyGoodMetrics private constructor(
     private var assignedVariants: Map<String, String> = emptyMap()
 
     /**
+     * Experiment configs for local bucketing (experiment name -> config),
+     * used only in [MGMExperimentMode.LOCAL]. Populated from inline configs,
+     * the persisted config cache, or a background fetch.
+     */
+    @Volatile
+    private var localExperimentConfigs: Map<String, MGMExperimentConfig> = emptyMap()
+
+    /**
      * Completes when the initial experiments load attempt finishes
      * (cache hit, successful fetch, or failed fetch). Never left hanging.
      */
@@ -148,10 +156,111 @@ class MostlyGoodMetrics private constructor(
         // Restore persisted exposure dedup state
         prefs?.getStringSet(KEY_EXPERIMENT_EXPOSURES, null)?.let { trackedExposures.addAll(it) }
 
-        // Stale-while-revalidate: serve the persisted variant cache immediately
-        // (no expiry), then refresh in the background without ever blocking init.
-        assignedVariants = loadCachedVariants(effectiveUserId)
-        fetchExperimentsAsync()
+        when (configuration.experimentMode) {
+            MGMExperimentMode.SERVER -> {
+                // Stale-while-revalidate: serve the persisted variant cache immediately
+                // (no expiry), then refresh in the background without ever blocking init.
+                assignedVariants = loadCachedVariants(effectiveUserId)
+                fetchExperimentsAsync()
+            }
+            MGMExperimentMode.LOCAL -> {
+                loadLocalExperiments()
+            }
+        }
+    }
+
+    /**
+     * Load experiment configs for local bucketing.
+     *
+     * Inline configs (via [MGMConfiguration.Builder.localExperiments]) are used
+     * as-is with no network fetch at all. Otherwise the persisted config cache
+     * is served immediately (stale-while-revalidate, same as SERVER mode) and
+     * refreshed in the background, throttled to roughly once per hour.
+     */
+    private fun loadLocalExperiments() {
+        if (configuration.localExperiments.isNotEmpty()) {
+            localExperimentConfigs = configuration.localExperiments.associateBy { it.name }
+            MGMLogger.debug("Using ${configuration.localExperiments.size} inline local experiment configs")
+            experimentsLoadDeferred.complete(Unit)
+            return
+        }
+
+        localExperimentConfigs = loadCachedConfigs().associateBy { it.name }
+
+        val lastFetchAt = prefs?.getLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, 0L) ?: 0L
+        if (System.currentTimeMillis() - lastFetchAt < EXPERIMENTS_REFETCH_INTERVAL_MS) {
+            MGMLogger.debug("Skipping experiment configs refetch (throttled), serving cached configs")
+            experimentsLoadDeferred.complete(Unit)
+            return
+        }
+
+        scope.launch {
+            try {
+                when (val result = networkClient.fetchExperimentConfigs()) {
+                    is ExperimentConfigsResult.Success -> {
+                        // Atomic swap: a single volatile write, never a clear-then-set.
+                        localExperimentConfigs = result.experiments.associateBy { it.name }
+                        saveCachedConfigs(result.experiments)
+                        prefs?.edit()
+                            ?.putLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, System.currentTimeMillis())
+                            ?.apply()
+                        MGMLogger.debug("Loaded ${result.experiments.size} experiment configs")
+                    }
+                    is ExperimentConfigsResult.Failure -> {
+                        MGMLogger.debug("Failed to load experiment configs: ${result.error.message}")
+                    }
+                }
+            } finally {
+                experimentsLoadDeferred.complete(Unit)
+            }
+        }
+    }
+
+    /**
+     * Load the persisted experiment config cache. The cache never expires.
+     */
+    private fun loadCachedConfigs(): List<MGMExperimentConfig> {
+        val json = prefs?.getString(KEY_EXPERIMENT_CONFIGS, null) ?: return emptyList()
+        return try {
+            val array = org.json.JSONArray(json)
+            val configs = mutableListOf<MGMExperimentConfig>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val variantsArray = obj.getJSONArray("variants")
+                val variants = mutableListOf<String>()
+                for (j in 0 until variantsArray.length()) {
+                    variants.add(variantsArray.getString(j))
+                }
+                configs.add(
+                    MGMExperimentConfig(
+                        id = obj.getString("id"),
+                        name = obj.getString("name"),
+                        variants = variants
+                    )
+                )
+            }
+            configs
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to parse cached experiment configs: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun saveCachedConfigs(configs: List<MGMExperimentConfig>) {
+        try {
+            val array = org.json.JSONArray()
+            configs.forEach { config ->
+                array.put(
+                    org.json.JSONObject()
+                        .put("id", config.id)
+                        .put("name", config.name)
+                        .put("variants", org.json.JSONArray(config.variants))
+                )
+            }
+            prefs?.edit()?.putString(KEY_EXPERIMENT_CONFIGS, array.toString())?.apply()
+        } catch (e: Exception) {
+            MGMLogger.warn("Failed to save cached experiment configs: ${e.message}")
+        }
     }
 
     /**
@@ -300,7 +409,9 @@ class MostlyGoodMetrics private constructor(
         // anonymous ID so the server can migrate prior anonymous assignments.
         // The currently served variants stay in place until the response
         // arrives, then are swapped atomically — never cleared mid-session.
-        if (userChanged) {
+        // LOCAL mode never refetches here: persisted local assignments are
+        // sticky across identify(), matching the server's canonical behavior.
+        if (userChanged && configuration.experimentMode == MGMExperimentMode.SERVER) {
             scope.launch {
                 fetchAndApplyVariants(userId = userId, anonymousId = anonymousId)
             }
@@ -468,9 +579,12 @@ class MostlyGoodMetrics private constructor(
     // region A/B Testing
 
     /**
-     * Get the server-assigned variant for an A/B test experiment.
+     * Get the assigned variant for an A/B test experiment.
      *
-     * Variants are always assigned by the server — the SDK never buckets locally.
+     * In [MGMExperimentMode.SERVER] (the default) variants are assigned by the
+     * server — the SDK never buckets locally. In [MGMExperimentMode.LOCAL]
+     * variants are bucketed deterministically on device and the assignment is
+     * sticky (persisted per experiment on first read).
      * This call is synchronous and non-blocking: it reads from the in-memory
      * cache (hydrated from persistent storage at init) and returns [fallback]
      * when the experiment is unknown or assignments have not loaded yet.
@@ -488,13 +602,43 @@ class MostlyGoodMetrics private constructor(
     @JvmOverloads
     fun getVariant(experimentName: String, fallback: String? = null): String? {
         return try {
-            val variant = assignedVariants[experimentName] ?: return fallback
+            val variant = when (configuration.experimentMode) {
+                MGMExperimentMode.SERVER -> assignedVariants[experimentName]
+                MGMExperimentMode.LOCAL -> localVariant(experimentName)
+            } ?: return fallback
             recordExposure(experimentName, variant)
             variant
         } catch (e: Exception) {
             MGMLogger.warn("getVariant failed for '$experimentName': ${e.message}")
             fallback
         }
+    }
+
+    /**
+     * Resolve a variant by bucketing on device ([MGMExperimentMode.LOCAL]).
+     *
+     * The assignment is sticky: the variant chosen on the first [getVariant]
+     * call is persisted per experiment UUID and reused thereafter — including
+     * after [identify] changes the effective user ID — matching the server's
+     * canonical behavior of never re-bucketing an enrolled user. A concurrent
+     * first read is benign: bucketing is deterministic, so racing writers
+     * persist the same value.
+     *
+     * TODO(privacy-controls): when the feat/privacy-controls branch merges,
+     * its forget-me / anonymous-ID-rotation flow should also clear the
+     * persisted "local_experiment_assignment_<uuid>" keys so a forgotten
+     * user is re-bucketed from scratch.
+     */
+    private fun localVariant(experimentName: String): String? {
+        val config = localExperimentConfigs[experimentName] ?: return null
+
+        val assignmentKey = KEY_LOCAL_EXPERIMENT_ASSIGNMENT_PREFIX + config.id
+        prefs?.getString(assignmentKey, null)?.let { return it }
+
+        val variant = LocalExperimentBucketing.variantFor(config, effectiveUserId) ?: return null
+        prefs?.edit()?.putString(assignmentKey, variant)?.apply()
+        MGMLogger.debug("Locally bucketed experiment '$experimentName' (${config.id}) to variant '$variant'")
+        return variant
     }
 
     /**
@@ -770,6 +914,9 @@ class MostlyGoodMetrics private constructor(
         private const val KEY_EXPERIMENT_VARIANTS_PREFIX = "experiment_variants_"
         private const val KEY_EXPERIMENTS_LAST_FETCH_PREFIX = "experiments_last_fetch_"
         private const val KEY_EXPERIMENT_EXPOSURES = "experiment_exposures"
+        private const val KEY_EXPERIMENT_CONFIGS = "experiment_configs"
+        private const val KEY_EXPERIMENT_CONFIGS_LAST_FETCH = "experiment_configs_last_fetch"
+        private const val KEY_LOCAL_EXPERIMENT_ASSIGNMENT_PREFIX = "local_experiment_assignment_"
         private const val PLATFORM = "android"
         private const val TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000L
 
@@ -846,6 +993,8 @@ class MostlyGoodMetrics private constructor(
                         .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
                         .wrapperName(configuration.wrapperName)
                         .wrapperVersion(configuration.wrapperVersion)
+                        .experimentMode(configuration.experimentMode)
+                        .localExperiments(configuration.localExperiments)
                         .build()
                 } else {
                     configuration

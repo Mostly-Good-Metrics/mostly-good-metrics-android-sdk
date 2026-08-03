@@ -51,6 +51,21 @@ sealed class ExperimentsResult {
 }
 
 /**
+ * Result of fetching experiment configs for local bucketing.
+ */
+sealed class ExperimentConfigsResult {
+    /**
+     * Successfully fetched experiment configs.
+     */
+    data class Success(val experiments: List<MGMExperimentConfig>) : ExperimentConfigsResult()
+
+    /**
+     * Failed to fetch experiment configs.
+     */
+    data class Failure(val error: MGMError) : ExperimentConfigsResult()
+}
+
+/**
  * Interface for network operations.
  */
 interface NetworkClientInterface {
@@ -67,6 +82,18 @@ interface NetworkClientInterface {
      *                    so the server can link prior anonymous assignments
      */
     suspend fun fetchExperiments(userId: String, anonymousId: String? = null): ExperimentsResult
+
+    /**
+     * Fetch experiment configs (id, name, variants) for local bucketing
+     * ([MGMExperimentMode.LOCAL]). No user identifier is sent.
+     *
+     * Default implementation fails so existing implementations stay
+     * source-compatible; the SDK only calls this in LOCAL mode.
+     */
+    suspend fun fetchExperimentConfigs(): ExperimentConfigsResult =
+        ExperimentConfigsResult.Failure(
+            MGMError.EncodingError(UnsupportedOperationException("fetchExperimentConfigs not implemented"))
+        )
 }
 
 /**
@@ -305,6 +332,106 @@ class NetworkClient(
         } finally {
             connection?.disconnect()
         }
+    }
+
+    /**
+     * Fetch experiment configs for local bucketing from the API.
+     * No user identifier is sent — this is what makes LOCAL mode private.
+     */
+    override suspend fun fetchExperimentConfigs(): ExperimentConfigsResult = withContext(Dispatchers.IO) {
+        var connection: HttpURLConnection? = null
+        try {
+            val url = URL("${configuration.baseUrl}/v1/experiments/configs")
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+
+                setRequestProperty("Authorization", "Bearer ${configuration.apiKey}")
+                setRequestProperty("User-Agent", buildUserAgent())
+                setRequestProperty("Accept", "application/json")
+
+                // SDK identification headers
+                setRequestProperty("X-MGM-SDK", "android")
+                setRequestProperty("X-MGM-SDK-Version", SDK_VERSION)
+
+                configuration.packageName?.let {
+                    setRequestProperty("X-MGM-Bundle-Id", it)
+                }
+            }
+
+            MGMLogger.debug("Fetching experiment configs from ${configuration.baseUrl}/v1/experiments/configs")
+
+            val statusCode = connection.responseCode
+            val body = try {
+                if (statusCode in 200..299) {
+                    connection.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                }
+            } catch (e: Exception) {
+                ""
+            }
+
+            MGMLogger.debug("Experiment configs response: $statusCode - $body")
+
+            when (statusCode) {
+                200 -> {
+                    try {
+                        val experiments = parseExperimentConfigsResponse(body)
+                        MGMLogger.debug("Fetched ${experiments.size} experiment configs")
+                        ExperimentConfigsResult.Success(experiments)
+                    } catch (e: Exception) {
+                        MGMLogger.error("Failed to parse experiment configs response", e)
+                        ExperimentConfigsResult.Failure(MGMError.EncodingError(e))
+                    }
+                }
+                401 -> {
+                    MGMLogger.warn("Unauthorized - invalid API key")
+                    ExperimentConfigsResult.Failure(MGMError.Unauthorized)
+                }
+                else -> {
+                    MGMLogger.warn("Failed to fetch experiment configs: $statusCode")
+                    ExperimentConfigsResult.Failure(MGMError.UnexpectedStatusCode(statusCode))
+                }
+            }
+        } catch (e: IOException) {
+            MGMLogger.error("Network error fetching experiment configs", e)
+            ExperimentConfigsResult.Failure(MGMError.NetworkError(e))
+        } catch (e: Exception) {
+            MGMLogger.error("Error fetching experiment configs", e)
+            ExperimentConfigsResult.Failure(MGMError.EncodingError(e))
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    /**
+     * Parse the experiment configs JSON response.
+     * Expected format:
+     * { "experiments": [ { "id": "<uuid>", "name": "button-color", "variants": ["a", "b"] } ] }
+     */
+    private fun parseExperimentConfigsResponse(jsonString: String): List<MGMExperimentConfig> {
+        val jsonObject = org.json.JSONObject(jsonString)
+        val experimentsArray = jsonObject.optJSONArray("experiments") ?: return emptyList()
+
+        val experiments = mutableListOf<MGMExperimentConfig>()
+        for (i in 0 until experimentsArray.length()) {
+            val experiment = experimentsArray.getJSONObject(i)
+            val variantsArray = experiment.getJSONArray("variants")
+            val variants = mutableListOf<String>()
+            for (j in 0 until variantsArray.length()) {
+                variants.add(variantsArray.getString(j))
+            }
+            experiments.add(
+                MGMExperimentConfig(
+                    id = experiment.getString("id"),
+                    name = experiment.getString("name"),
+                    variants = variants
+                )
+            )
+        }
+        return experiments
     }
 
     /**

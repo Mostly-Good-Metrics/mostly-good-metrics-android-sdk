@@ -20,6 +20,7 @@ A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics]
 - [Properties](#properties)
 - [Super Properties](#super-properties)
 - [A/B Testing (Experiments)](#ab-testing-experiments)
+  - [Local experiment enrollment](#local-experiment-enrollment)
 - [Manual Flush](#manual-flush)
 - [Debug Logging](#debug-logging)
 - [Java Interop](#java-interop)
@@ -436,6 +437,45 @@ val loaded = MostlyGoodMetrics.ready(timeoutMs = 2_000)
 - Reading a variant sets the super property `$experiment_{snake_case(name)}` so the variant is attached to all subsequent events
 - Reading a variant tracks a `$experiment_exposure` event (`$experiment_name`, `$variant`) once per user/experiment/variant — the dedup is persisted and survives app restarts
 - After `identify()` with a new user ID, the SDK keeps serving the current variants and refetches assignments for the new user (linking the stored anonymous ID); the new assignments are swapped in atomically when the response arrives
+
+### Local experiment enrollment
+
+By default variants are assigned by the server (`experimentMode = SERVER`). With `MGMExperimentMode.LOCAL` the SDK buckets users **on device** instead: it fetches only the experiment definitions (`GET /v1/experiments/configs` — id, name, variants; no user identifier is sent) and deterministically picks a variant by hashing `"<experiment_uuid>:<user_id>"` with SHA-256, exactly matching the server's canonical algorithm.
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .experimentMode(MGMExperimentMode.LOCAL)
+    .build()
+MostlyGoodMetrics.configure(this, config)
+
+// Same API as SERVER mode
+val variant = MostlyGoodMetrics.getVariant("button-color", fallback = "a")
+```
+
+You can also supply the experiment definitions inline, in which case the SDK makes **no experiments network request at all**:
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .experimentMode(MGMExperimentMode.LOCAL)
+    .localExperiments(
+        listOf(
+            MGMExperimentConfig(
+                id = "7b1e8a90-4c2d-4f6a-9e3b-2a1d5c8f0e71", // experiment UUID
+                name = "button-color",
+                variants = listOf("a", "b")
+            )
+        )
+    )
+    .build()
+```
+
+**Behavior:**
+- The first `getVariant()` call persists the assignment per experiment; it is reused thereafter and never re-bucketed — including after `identify()` — matching the server's canonical stickiness
+- Exposure tracking is unchanged: the same `$experiment_exposure` event and `$experiment_{snake_case(name)}` super property are recorded, so analysis works identically in both modes
+
+**Privacy benefit:** in LOCAL mode no per-user assignment request is made — the server never learns which users are enrolled until (and unless) exposure events are tracked, and with inline configs the experiments feature works fully offline.
+
+**Cross-device caveat:** local assignments are sticky **per device**. A user who is bucketed anonymously on two devices before `identify()` may receive different variants on each (the server's canonical assignment migrates anonymous enrollments on identify; local mode cannot). If cross-device consistency matters, use `SERVER` mode.
 
 ## Manual Flush
 
