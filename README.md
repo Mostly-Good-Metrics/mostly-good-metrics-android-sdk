@@ -170,7 +170,7 @@ For more control, use `MGMConfiguration.Builder`:
 
 ```kotlin
 val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
-    .baseUrl("https://mostlygoodmetrics.com")
+    .baseUrl("https://ingest.mostlygoodmetrics.com")
     .environment("production")
     .maxBatchSize(100)
     .flushIntervalSeconds(30)
@@ -185,7 +185,7 @@ MostlyGoodMetrics.configure(this, config)
 | Option | Default | Description |
 |--------|---------|-------------|
 | `apiKey` | Required | Your API key |
-| `baseUrl` | `https://mostlygoodmetrics.com` | API endpoint |
+| `baseUrl` | `https://ingest.mostlygoodmetrics.com` | API endpoint |
 | `environment` | `"production"` | Environment name |
 | `packageName` | App's package name | Override package identifier |
 | `maxBatchSize` | `100` | Events per batch (1-1000) |
@@ -594,7 +594,7 @@ MostlyGoodMetrics.configure(context, "mgm_proj_your_api_key");
 
 // With configuration
 MGMConfiguration config = new MGMConfiguration.Builder("mgm_proj_your_api_key")
-    .baseUrl("https://mostlygoodmetrics.com")
+    .baseUrl("https://ingest.mostlygoodmetrics.com")
     .environment("production")
     .maxBatchSize(100)
     .flushIntervalSeconds(30)
