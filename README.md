@@ -2,6 +2,8 @@
 
 A lightweight Android SDK for tracking analytics events with [MostlyGoodMetrics](https://mostlygoodmetrics.com).
 
+Documentation: [docs.mostlygoodmetrics.com](https://docs.mostlygoodmetrics.com)
+
 ## Table of Contents
 
 - [Requirements](#requirements)
@@ -41,7 +43,7 @@ Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.Mostly-Good-Metrics:mostly-good-metrics-android-sdk:1.0.0")
+    implementation("com.github.Mostly-Good-Metrics:mostly-good-metrics-android-sdk:0.3.0")
 }
 ```
 
@@ -61,7 +63,7 @@ Add the dependency to your `build.gradle`:
 
 ```groovy
 dependencies {
-    implementation 'com.github.Mostly-Good-Metrics:mostly-good-metrics-android-sdk:1.0.0'
+    implementation 'com.github.Mostly-Good-Metrics:mostly-good-metrics-android-sdk:0.3.0'
 }
 ```
 
@@ -96,7 +98,7 @@ Add the dependency:
 <dependency>
     <groupId>com.github.Mostly-Good-Metrics</groupId>
     <artifactId>mostly-good-metrics-android-sdk</artifactId>
-    <version>1.0.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
