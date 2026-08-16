@@ -328,10 +328,7 @@ class MostlyGoodMetrics private constructor(
             profile.email?.let { properties["email"] = it }
             profile.name?.let { properties["name"] = it }
 
-            // Link the stored anonymous ID (the id used for events before
-            // identify()) so the backend can merge the pre-identify anonymous
-            // profile into the newly-identified user. Only include it when it is
-            // set and actually differs from the identified user id.
+            // Send stored anon id (when distinct) so the backend can merge pre-identify events.
             if (anonymousId.isNotEmpty() && anonymousId != userId) {
                 properties["\$anonymous_id"] = anonymousId
             }

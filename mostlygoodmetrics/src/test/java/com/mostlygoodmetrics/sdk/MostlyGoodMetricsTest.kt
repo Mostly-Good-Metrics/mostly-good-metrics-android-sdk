@@ -388,9 +388,7 @@ class MostlyGoodMetricsTest {
         val mockNetwork = MockNetworkClient(SendResult.Success)
         val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
 
-        // The SDK generates an anonymous id at init that is used for events
-        // before identify(). Capture it so we can assert it is carried on the
-        // $identify event's properties.
+        // Capture the pre-identify anonymous id to assert it lands on $identify.
         val anonymousIdBeforeIdentify = sdk.anonymousId
         assertTrue(
             "Expected a non-empty anonymous id before identify()",
