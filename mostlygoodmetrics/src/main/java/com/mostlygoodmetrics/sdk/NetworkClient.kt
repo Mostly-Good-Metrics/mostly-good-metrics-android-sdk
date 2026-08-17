@@ -13,7 +13,7 @@ import java.net.URLEncoder
 import java.util.zip.GZIPOutputStream
 
 /** SDK version for User-Agent header */
-internal const val SDK_VERSION = "0.2.6"
+internal const val SDK_VERSION = "0.5.0"
 
 /**
  * Result of a network send operation.
