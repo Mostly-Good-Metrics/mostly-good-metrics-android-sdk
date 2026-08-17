@@ -379,6 +379,41 @@ class MostlyGoodMetricsTest {
     }
 
     @Test
+    fun `identify $identify event includes $anonymous_id of pre-identify anonymous id`() {
+        val storage = InMemoryEventStorage(maxEvents = 100)
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .enableDebugLogging(false)
+            .trackAppLifecycleEvents(false)
+            .build()
+        val mockNetwork = MockNetworkClient(SendResult.Success)
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, mockNetwork)
+
+        // Capture the pre-identify anonymous id to assert it lands on $identify.
+        val anonymousIdBeforeIdentify = sdk.anonymousId
+        assertTrue(
+            "Expected a non-empty anonymous id before identify()",
+            anonymousIdBeforeIdentify.isNotEmpty()
+        )
+
+        sdk.identify("user-123", UserProfile(email = "test@example.com"))
+
+        val events = storage.fetchEvents(10)
+        val identifyEvent = events.find { it.name == "\$identify" }
+        assertNotNull("Expected \$identify event to be tracked", identifyEvent)
+
+        // user_id stays the newly-identified id
+        assertEquals("user-123", identifyEvent!!.userId)
+
+        val properties = identifyEvent.properties
+        assertNotNull(properties)
+        val anonymousIdValue =
+            (properties?.get("\$anonymous_id") as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertEquals(anonymousIdBeforeIdentify, anonymousIdValue)
+
+        sdk.shutdown()
+    }
+
+    @Test
     fun `identify without profile does not send $identify event`() {
         val storage = InMemoryEventStorage(maxEvents = 100)
         val configuration = MGMConfiguration.Builder("test-api-key")
