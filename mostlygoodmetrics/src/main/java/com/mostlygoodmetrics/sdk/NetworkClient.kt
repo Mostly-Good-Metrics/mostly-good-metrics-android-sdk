@@ -12,8 +12,14 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.zip.GZIPOutputStream
 
-/** SDK version for User-Agent header */
-internal const val SDK_VERSION = "0.5.0"
+/**
+ * SDK version for the User-Agent and X-MGM-SDK-Version headers.
+ *
+ * Sourced from BuildConfig (see `version` in build.gradle.kts) so it always
+ * matches the published artifact version instead of being a second hardcoded
+ * literal that can drift out of sync with the release.
+ */
+internal val SDK_VERSION: String = BuildConfig.SDK_VERSION
 
 /**
  * Result of a network send operation.
