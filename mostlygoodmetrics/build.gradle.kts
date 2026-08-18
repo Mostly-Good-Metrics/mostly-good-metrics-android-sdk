@@ -6,6 +6,12 @@ plugins {
     jacoco
 }
 
+// Single source of truth for the SDK/artifact version. Release CI bumps this
+// `version = "…"` line (see tools/workflows/bump-version.yml). Both the Maven
+// publication and BuildConfig.SDK_VERSION derive from it, so the value sent in
+// the User-Agent / X-MGM-SDK-Version headers can never drift from the release.
+version = "0.5.0"
+
 android {
     namespace = "com.mostlygoodmetrics.sdk"
     compileSdk = 34
@@ -15,6 +21,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+
+        buildConfigField("String", "SDK_VERSION", "\"$version\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -101,7 +113,7 @@ publishing {
         register<MavenPublication>("release") {
             groupId = "com.mostlygoodmetrics"
             artifactId = "sdk"
-            version = "0.5.0"
+            version = project.version.toString()
 
             afterEvaluate {
                 from(components["release"])
