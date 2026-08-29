@@ -133,6 +133,34 @@ class MostlyGoodMetricsTest {
     }
 
     @Test
+    fun `dynamic context is evaluated per event with documented precedence`() {
+        var workspace = "workspace-a"
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .trackAppLifecycleEvents(false)
+            .contextProvider { mapOf("tier" to "context", "workspace" to workspace, "\$sdk" to "context") }
+            .build()
+        val storage = InMemoryEventStorage(maxEvents = 10)
+        val sdk = MostlyGoodMetrics.createForTesting(
+            configuration = configuration,
+            storage = storage,
+            networkClient = MockNetworkClient(SendResult.Success)
+        )
+        sdk.setSuperProperties(mapOf("tier" to "super", "workspace" to "super"))
+
+        sdk.track("first_event", mapOf("tier" to "event"))
+        workspace = "workspace-b"
+        sdk.track("second_event")
+
+        val events = storage.fetchEvents(10)
+        assertEquals("event", events[0].properties?.get("tier")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+        assertEquals("workspace-a", events[0].properties?.get("workspace")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+        assertEquals("workspace-b", events[1].properties?.get("workspace")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+        assertEquals("android", events[0].properties?.get("\$sdk")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+
+        sdk.shutdown()
+    }
+
+    @Test
     fun `events include timestamp`() {
         val event = MGMEvent.create("test_event")
 

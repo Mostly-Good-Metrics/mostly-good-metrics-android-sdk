@@ -16,6 +16,8 @@ class MGMConfiguration private constructor(
     val trackAppLifecycleEvents: Boolean,
     val optedOutByDefault: Boolean,
     val collectDeviceProperties: Boolean,
+    val existingInstallation: Boolean,
+    val contextProvider: (() -> Map<String, Any?>)?,
     val wrapperName: String?,
     val wrapperVersion: String?,
     val experimentMode: MGMExperimentMode,
@@ -37,6 +39,8 @@ class MGMConfiguration private constructor(
         private var trackAppLifecycleEvents: Boolean = true
         private var optedOutByDefault: Boolean = false
         private var collectDeviceProperties: Boolean = true
+        private var existingInstallation: Boolean = false
+        private var contextProvider: (() -> Map<String, Any?>)? = null
         private var wrapperName: String? = null
         private var wrapperVersion: String? = null
         private var experimentMode: MGMExperimentMode = MGMExperimentMode.SERVER
@@ -127,6 +131,29 @@ class MGMConfiguration private constructor(
         }
 
         /**
+         * Mark a known existing device installation when migrating from
+         * another analytics provider. On its first MGM launch, the SDK records
+         * the current version as its lifecycle baseline without sending
+         * `$app_installed`. Later version changes still send `$app_updated`.
+         * Pass true only when the host app can identify an existing install
+         * (for example, using its own prior-install marker).
+         * Default: false.
+         */
+        fun existingInstallation(existing: Boolean = true) = apply {
+            this.existingInstallation = existing
+        }
+
+        /**
+         * Provide dynamic properties evaluated every time an event is tracked.
+         * Context properties override super properties; explicit event
+         * properties override context; MGM system properties always win.
+         * Exceptions are ignored so analytics never disrupts the host app.
+         */
+        fun contextProvider(provider: (() -> Map<String, Any?>)?) = apply {
+            this.contextProvider = provider
+        }
+
+        /**
          * Set the wrapper SDK name (e.g., "react-native", "flutter", "expo").
          * Used by hybrid framework SDKs to identify themselves.
          * Default: null (no wrapper)
@@ -187,6 +214,8 @@ class MGMConfiguration private constructor(
                 trackAppLifecycleEvents = trackAppLifecycleEvents,
                 optedOutByDefault = optedOutByDefault,
                 collectDeviceProperties = collectDeviceProperties,
+                existingInstallation = existingInstallation,
+                contextProvider = contextProvider,
                 wrapperName = wrapperName,
                 wrapperVersion = wrapperVersion,
                 experimentMode = experimentMode,
