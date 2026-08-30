@@ -7,10 +7,10 @@ plugins {
 }
 
 // Single source of truth for the SDK/artifact version. Release CI bumps this
-// `version = "…"` line (see tools/workflows/bump-version.yml). Both the Maven
+// `version = "0.6.0"` line (see tools/workflows/bump-version.yml). Both the Maven
 // publication and BuildConfig.SDK_VERSION derive from it, so the value sent in
 // the User-Agent / X-MGM-SDK-Version headers can never drift from the release.
-version = "0.5.0"
+version = "0.6.0"
 
 android {
     namespace = "com.mostlygoodmetrics.sdk"
