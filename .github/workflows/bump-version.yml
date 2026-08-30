@@ -47,7 +47,7 @@ jobs:
             CURRENT=$(grep "s.version" "$FILE" | sed "s/.*['\"]\(.*\)['\"].*/\1/")
           elif [ -f "mostlygoodmetrics/build.gradle.kts" ]; then
             FILE="mostlygoodmetrics/build.gradle.kts"
-            CURRENT=$(grep 'version = "' "$FILE" | sed 's/.*version = "\(.*\)".*/\1/')
+            CURRENT=$(grep '^version = "' "$FILE" | sed 's/.*version = "\(.*\)".*/\1/')
           else
             echo "No version file found"
             exit 1
