@@ -195,6 +195,22 @@ MostlyGoodMetrics.configure(this, config)
 | `trackAppLifecycleEvents` | `true` | Auto-track lifecycle events |
 | `optedOutByDefault` | `false` | Start opted out until `optIn()` is called (consent-first apps) |
 | `collectDeviceProperties` | `true` | Collect device model/type, manufacturer, locale, timezone |
+| `existingInstallation` | `false` | Seed lifecycle state on migration without emitting a false `$app_installed` |
+| `contextProvider` | `null` | Function evaluated for every event to add dynamic properties |
+
+### Migrating an existing app to MGM
+
+When adding MGM to an app that already has users, mark each **known existing installation** as such. MGM records the current version as its baseline without sending `$app_installed`; future version changes continue to send `$app_updated` normally. Do not enable this unconditionally for a migration release: it would also suppress real installs by brand-new users.
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    // Reuse your own existing-install marker from before MGM was added.
+    .existingInstallation(legacyInstallMarkerExists())
+    .build()
+MostlyGoodMetrics.configure(this, config)
+```
+
+The setting only affects the first MGM launch; MGM persists the lifecycle baseline immediately.
 
 ## User Identification
 
@@ -411,6 +427,23 @@ MostlyGoodMetrics.clearSuperProperties()
 - They're included with every tracked event automatically
 - Setting a property with an existing key overwrites the previous value
 - Super properties are merged with event properties (event properties take precedence if keys conflict)
+
+### Dynamic context properties
+
+Use `contextProvider` for values that can change while the app is running, such as the current account, active workspace, or feature-flag state. The provider runs for every event and must be fast; if it throws, MGM tracks the event without that dynamic context.
+
+```kotlin
+val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
+    .contextProvider {
+        mapOf(
+            "active_workspace_id" to currentWorkspaceId(),
+            "subscription_tier" to currentSubscriptionTier()
+        )
+    }
+    .build()
+```
+
+Property precedence is deterministic: **super properties < dynamic context < explicit event properties < MGM system properties**. Keys beginning with `$` are reserved for MGM system properties. With `enableDebugLogging(true)`, MGM warns about reserved keys on custom events and invalid event names before dropping them.
 
 ## A/B Testing (Experiments)
 

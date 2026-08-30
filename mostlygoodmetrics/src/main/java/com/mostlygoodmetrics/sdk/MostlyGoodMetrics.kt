@@ -383,9 +383,13 @@ class MostlyGoodMetrics private constructor(
         }
 
         if (!MGMEvent.isValidEventName(name)) {
-            MGMLogger.warn("Invalid event name: $name")
+            if (configuration.enableDebugLogging) {
+                MGMLogger.warn("Invalid event name: $name")
+            }
             return
         }
+
+        validateDebugProperties(name, properties)
 
         val mergedProperties = buildProperties(properties)
 
@@ -911,8 +915,12 @@ class MostlyGoodMetrics private constructor(
 
         when {
             storedVersion == null -> {
-                // First install
-                track("\$app_installed", mapOf("version" to currentVersion))
+                if (configuration.existingInstallation) {
+                    MGMLogger.debug("Existing installation: lifecycle baseline established without \$app_installed")
+                } else {
+                    // First install
+                    track("\$app_installed", mapOf("version" to currentVersion))
+                }
             }
             storedVersion != currentVersion -> {
                 // App updated
@@ -935,10 +943,18 @@ class MostlyGoodMetrics private constructor(
             systemProperties["\$device_model"] = Build.MODEL ?: "unknown"
         }
 
-        // Merge properties: super properties < user properties < system properties
-        // User properties override super properties, system properties are always added
+        // Merge properties: super properties < dynamic context < event < system.
+        // Event properties override dynamic context, system properties always win.
         val superProperties = getSuperProperties()
         val merged = superProperties.toMutableMap()
+
+        val dynamicContext = try {
+            configuration.contextProvider?.invoke().orEmpty()
+        } catch (e: Exception) {
+            MGMLogger.warn("Context provider failed; tracking event without dynamic context: ${e.message}")
+            emptyMap()
+        }
+        merged.putAll(dynamicContext)
 
         if (userProperties != null) {
             merged.putAll(userProperties)
@@ -947,6 +963,17 @@ class MostlyGoodMetrics private constructor(
         merged.putAll(systemProperties)
 
         return merged
+    }
+
+    private fun validateDebugProperties(name: String, properties: Map<String, Any?>?) {
+        if (!configuration.enableDebugLogging || name.startsWith("$")) return
+
+        properties.orEmpty()
+            .keys
+            .filter { it.startsWith("$") }
+            .forEach { key ->
+                MGMLogger.warn("Reserved property key '$key' on custom event '$name'. Keys beginning with '$' are reserved for MGM system properties.")
+            }
     }
 
     private fun getAppVersion(): String {
@@ -1100,6 +1127,8 @@ class MostlyGoodMetrics private constructor(
                         .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
                         .optedOutByDefault(configuration.optedOutByDefault)
                         .collectDeviceProperties(configuration.collectDeviceProperties)
+                        .existingInstallation(configuration.existingInstallation)
+                        .contextProvider(configuration.contextProvider)
                         .wrapperName(configuration.wrapperName)
                         .wrapperVersion(configuration.wrapperVersion)
                         .experimentMode(configuration.experimentMode)

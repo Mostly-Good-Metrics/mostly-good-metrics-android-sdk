@@ -18,6 +18,8 @@ class MGMConfigurationTest {
         assertEquals(MGMConfiguration.DEFAULT_MAX_STORED_EVENTS, config.maxStoredEvents)
         assertFalse(config.enableDebugLogging)
         assertTrue(config.trackAppLifecycleEvents)
+        assertFalse(config.existingInstallation)
+        assertNull(config.contextProvider)
     }
 
     @Test
@@ -96,5 +98,17 @@ class MGMConfigurationTest {
     @Test(expected = IllegalArgumentException::class)
     fun `builder throws on empty API key`() {
         MGMConfiguration.Builder("").build()
+    }
+
+    @Test
+    fun `builder supports existing installation and dynamic context`() {
+        val contextProvider = { mapOf<String, Any?>("workspace_id" to "workspace-1") }
+        val config = MGMConfiguration.Builder("key")
+            .existingInstallation()
+            .contextProvider(contextProvider)
+            .build()
+
+        assertTrue(config.existingInstallation)
+        assertEquals("workspace-1", config.contextProvider?.invoke()?.get("workspace_id"))
     }
 }
