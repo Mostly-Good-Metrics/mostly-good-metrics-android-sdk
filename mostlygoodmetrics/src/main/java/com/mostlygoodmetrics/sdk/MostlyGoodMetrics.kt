@@ -901,9 +901,7 @@ class MostlyGoodMetrics private constructor(
             }
 
             override fun onStop(owner: LifecycleOwner) {
-                track("\$app_backgrounded")
-                // Flush when app goes to background
-                flush()
+                handleAppBackgrounded()
             }
         }
 
@@ -911,6 +909,13 @@ class MostlyGoodMetrics private constructor(
         scope.launch(Dispatchers.Main) {
             ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         }
+    }
+
+    internal fun handleAppBackgrounded() {
+        track("\$app_backgrounded")
+        (storage as? FileEventStorage)?.awaitPersistence()
+        // Flush when app goes to background, after the lifecycle event is durable.
+        flush()
     }
 
     private fun trackInstallOrUpdate() {

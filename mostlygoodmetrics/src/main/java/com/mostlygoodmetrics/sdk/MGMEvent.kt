@@ -54,6 +54,9 @@ data class MGMEvent(
                 timeZone = TimeZone.getTimeZone("UTC")
             }
 
+        private fun format(timestamp: Date): String =
+            synchronized(iso8601Format) { iso8601Format.format(timestamp) }
+
         /**
          * Validates an event name.
          * @return true if the name is valid, false otherwise
@@ -121,7 +124,7 @@ data class MGMEvent(
             return MGMEvent(
                 name = name,
                 clientEventId = UUID.randomUUID().toString(),
-                timestamp = synchronized(iso8601Format) { iso8601Format.format(timestamp) },
+                timestamp = format(timestamp),
                 userId = userId,
                 sessionId = sessionId,
                 platform = platform,

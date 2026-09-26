@@ -401,6 +401,57 @@ class EventStorageTest {
     }
 
     @Test
+    fun `app background waits for lifecycle event persistence before flushing`() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val backgroundHandlingReturned = CountDownLatch(1)
+        val directory = temporaryFolder.newFolder("background-persistence")
+        val storage = FileEventStorage(
+            storageDir = directory,
+            persistenceDelayMs = 0,
+            beforePersist = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            }
+        )
+        val configuration = MGMConfiguration.Builder("test-api-key")
+            .trackAppLifecycleEvents(false)
+            .build()
+        val sdk = MostlyGoodMetrics.createForTesting(
+            configuration = configuration,
+            storage = storage,
+            networkClient = MockNetworkClient(
+                SendResult.RetryLater(MGMError.ServerError(503, "retry"))
+            )
+        )
+
+        try {
+            Thread {
+                sdk.handleAppBackgrounded()
+                backgroundHandlingReturned.countDown()
+            }.start()
+
+            assertTrue(persistenceStarted.await(1, TimeUnit.SECONDS))
+            assertFalse(
+                "Background handling must wait for the lifecycle event to reach disk",
+                backgroundHandlingReturned.await(100, TimeUnit.MILLISECONDS)
+            )
+
+            releasePersistence.countDown()
+            assertTrue(backgroundHandlingReturned.await(1, TimeUnit.SECONDS))
+
+            val contents = File(directory, "events.json").readText()
+            val persistedEvents =
+                kotlinx.serialization.json.Json.decodeFromString<List<MGMEvent>>(contents)
+            assertEquals(listOf("\$app_backgrounded"), persistedEvents.map { it.name })
+        } finally {
+            releasePersistence.countDown()
+            backgroundHandlingReturned.await(1, TimeUnit.SECONDS)
+            sdk.shutdown()
+        }
+    }
+
+    @Test
     fun `file storage removes only the matching client event id`() {
         val directory = temporaryFolder.newFolder("stable-id-removal")
         val storage = FileEventStorage(storageDir = directory, persistenceDelayMs = 0)

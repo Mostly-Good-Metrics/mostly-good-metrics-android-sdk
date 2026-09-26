@@ -36,7 +36,10 @@ a release variant, run:
 ```
 
 `MainThreadStorageBenchmarkTest` preloads 100, 1,000, and 10,000 events and
-asserts that median main-thread latency stays below 5 ms.
+asserts that median main-thread latency stays below 5 ms. This connected test is
+manual and does not run in CI; the always-on JVM tests are the regression gate.
+Because the module sets `testBuildType = "release"`, Gradle provides
+`connectedReleaseAndroidTest` instead of `connectedDebugAndroidTest`.
 
 ### 4. Public API Changes
 

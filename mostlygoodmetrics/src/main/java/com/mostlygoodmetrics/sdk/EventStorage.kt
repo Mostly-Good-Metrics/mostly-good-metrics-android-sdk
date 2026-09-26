@@ -196,7 +196,16 @@ class FileEventStorage internal constructor(
         }
     }
 
-    internal fun awaitPersistence(timeoutMs: Long = 5_000): Boolean {
+    /**
+     * Wait for all event mutations queued before this call to be persisted.
+     *
+     * This is intended for lifecycle boundaries where the process may be stopped
+     * before the normal coalescing delay expires.
+     *
+     * @return true when persistence completed, or false when [timeoutMs] elapsed
+     */
+    @JvmOverloads
+    fun awaitPersistence(timeoutMs: Long = 5_000): Boolean {
         val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         synchronized(persistenceMonitor) {
             while (persistenceScheduled) {
