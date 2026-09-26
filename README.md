@@ -300,7 +300,7 @@ The SDK automatically handles the following without any additional configuration
 The SDK is fully thread-safe. All methods can be called from any thread:
 - `track()` captures the complete event, including its timestamp, on the calling thread
 - Disk serialization and atomic JSON-array rewrites are coalesced on a background storage thread
-- App backgrounding waits for `$app_backgrounded` to reach disk before starting the network flush
+- App backgrounding waits up to 750 ms for `$app_backgrounded` to reach disk before starting the network flush
 - Flush operations are serialized to prevent race conditions
 - Storage operations are atomic
 

@@ -4,7 +4,10 @@ import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CompletableDeferred
@@ -42,7 +45,9 @@ class MostlyGoodMetrics private constructor(
     private val configuration: MGMConfiguration,
     private val storage: EventStorage,
     private val networkClient: NetworkClientInterface,
-    private val prefs: SharedPreferences?
+    private val prefs: SharedPreferences?,
+    private val processLifecycle: Lifecycle?,
+    private val dispatchLifecycleAction: ((() -> Unit) -> Unit)
 ) {
     /**
      * Primary constructor for production use.
@@ -55,12 +60,16 @@ class MostlyGoodMetrics private constructor(
         configuration = configuration,
         storage = FileEventStorage(context, configuration.maxStoredEvents),
         networkClient = NetworkClient(configuration),
-        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+        processLifecycle = ProcessLifecycleOwner.get().lifecycle,
+        dispatchLifecycleAction = ::dispatchOnMainThread
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var flushJob: Job? = null
     private val isFlushing = AtomicBoolean(false)
+    @Volatile
+    private var lifecycleObserver: DefaultLifecycleObserver? = null
 
     /**
      * Whether the user has opted out of tracking. Persisted across app launches.
@@ -163,8 +172,8 @@ class MostlyGoodMetrics private constructor(
         // Start flush timer
         startFlushTimer()
 
-        // Setup lifecycle tracking (only when context is available)
-        if (configuration.trackAppLifecycleEvents && context != null) {
+        // Setup lifecycle tracking when a process lifecycle is available.
+        if (configuration.trackAppLifecycleEvents && processLifecycle != null) {
             setupLifecycleTracking()
         }
 
@@ -895,25 +904,30 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun setupLifecycleTracking() {
-        val lifecycleObserver = object : DefaultLifecycleObserver {
+        val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
+                if (lifecycleObserver !== this) return
                 track("\$app_opened")
             }
 
             override fun onStop(owner: LifecycleOwner) {
+                if (lifecycleObserver !== this) return
                 handleAppBackgrounded()
             }
         }
+        lifecycleObserver = observer
 
         // Must be called on main thread
-        scope.launch(Dispatchers.Main) {
-            ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        dispatchLifecycleAction {
+            if (lifecycleObserver === observer) {
+                processLifecycle?.addObserver(observer)
+            }
         }
     }
 
     internal fun handleAppBackgrounded() {
         track("\$app_backgrounded")
-        (storage as? FileEventStorage)?.awaitPersistence()
+        (storage as? FileEventStorage)?.awaitPersistence(BACKGROUND_PERSISTENCE_TIMEOUT_MS)
         // Flush when app goes to background, after the lifecycle event is durable.
         flush()
     }
@@ -1041,6 +1055,12 @@ class MostlyGoodMetrics private constructor(
      */
     fun shutdown() {
         MGMLogger.info("Shutting down MostlyGoodMetrics SDK")
+        lifecycleObserver?.let { observer ->
+            lifecycleObserver = null
+            dispatchLifecycleAction {
+                processLifecycle?.removeObserver(observer)
+            }
+        }
         flushJob?.cancel()
         scope.cancel()
         (storage as? CloseableEventStorage)?.close()
@@ -1052,6 +1072,7 @@ class MostlyGoodMetrics private constructor(
         private const val KEY_ANONYMOUS_ID = "anonymous_id"
         private const val KEY_OPTED_OUT = "opted_out"
         private const val KEY_APP_VERSION = "app_version"
+        private const val BACKGROUND_PERSISTENCE_TIMEOUT_MS = 750L
         private const val KEY_SUPER_PROPERTIES = "super_properties"
         private const val KEY_IDENTIFY_HASH = "identify_hash"
         private const val KEY_IDENTIFY_TIMESTAMP = "identify_timestamp"
@@ -1404,16 +1425,29 @@ class MostlyGoodMetrics private constructor(
             configuration: MGMConfiguration,
             storage: EventStorage,
             networkClient: NetworkClientInterface,
-            prefs: SharedPreferences? = null
+            prefs: SharedPreferences? = null,
+            processLifecycle: Lifecycle? = null,
+            dispatchLifecycleAction: ((() -> Unit) -> Unit) = { action -> action() }
         ): MostlyGoodMetrics {
             return MostlyGoodMetrics(
                 context = null,
                 configuration = configuration,
                 storage = storage,
                 networkClient = networkClient,
-                prefs = prefs
+                prefs = prefs,
+                processLifecycle = processLifecycle,
+                dispatchLifecycleAction = dispatchLifecycleAction
             )
         }
+    }
+}
+
+private fun dispatchOnMainThread(action: () -> Unit) {
+    val mainLooper = Looper.getMainLooper()
+    if (Looper.myLooper() == mainLooper) {
+        action()
+    } else {
+        Handler(mainLooper).post(action)
     }
 }
 

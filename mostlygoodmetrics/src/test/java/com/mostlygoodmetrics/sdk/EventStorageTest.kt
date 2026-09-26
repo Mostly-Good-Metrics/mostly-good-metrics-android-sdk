@@ -1,5 +1,8 @@
 package com.mostlygoodmetrics.sdk
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
@@ -7,8 +10,12 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class EventStorageTest {
 
@@ -401,6 +408,73 @@ class EventStorageTest {
     }
 
     @Test
+    fun `awaitPersistence waits only for the revision captured at call time`() {
+        val persistencePermits = Semaphore(0)
+        val firstPersistenceStarted = CountDownLatch(1)
+        val secondPersistenceStarted = CountDownLatch(1)
+        val persistenceCount = AtomicInteger(0)
+        val keepMutating = AtomicBoolean(true)
+        val firstMutationStored = CountDownLatch(1)
+        val awaitReturned = CountDownLatch(1)
+        val awaitResult = AtomicReference<Boolean>()
+        val storage = FileEventStorage(
+            storageDir = temporaryFolder.newFolder("revision-watermark"),
+            persistenceDelayMs = 0,
+            beforePersist = {
+                when (persistenceCount.incrementAndGet()) {
+                    1 -> firstPersistenceStarted.countDown()
+                    2 -> secondPersistenceStarted.countDown()
+                }
+                persistencePermits.acquire()
+            }
+        )
+
+        storage.store(createTestEvent("before_await"))
+        assertTrue(firstPersistenceStarted.await(1, TimeUnit.SECONDS))
+
+        val mutator = Thread {
+            var index = 0
+            while (keepMutating.get()) {
+                storage.store(createTestEvent("mutation_${index++}"))
+                firstMutationStored.countDown()
+            }
+        }
+        val awaitThread = Thread {
+            awaitResult.set(storage.awaitPersistence(2_000))
+            awaitReturned.countDown()
+        }
+
+        try {
+            mutator.start()
+            assertTrue(firstMutationStored.await(1, TimeUnit.SECONDS))
+            awaitThread.start()
+
+            val waitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (awaitThread.state != Thread.State.TIMED_WAITING && System.nanoTime() < waitDeadline) {
+                Thread.yield()
+            }
+            assertEquals(Thread.State.TIMED_WAITING, awaitThread.state)
+
+            persistencePermits.release()
+            assertTrue(secondPersistenceStarted.await(1, TimeUnit.SECONDS))
+            persistencePermits.release()
+
+            assertTrue(
+                "Continuous later mutations must not hold the earlier persistence barrier",
+                awaitReturned.await(1, TimeUnit.SECONDS)
+            )
+            assertTrue(awaitResult.get())
+            assertTrue("The mutator should still be active when the barrier returns", mutator.isAlive)
+        } finally {
+            keepMutating.set(false)
+            mutator.join(1_000)
+            persistencePermits.release(100)
+            awaitThread.join(1_000)
+            storage.closeForTesting()
+        }
+    }
+
+    @Test
     fun `app background waits for lifecycle event persistence before flushing`() {
         val persistenceStarted = CountDownLatch(1)
         val releasePersistence = CountDownLatch(1)
@@ -449,6 +523,101 @@ class EventStorageTest {
             backgroundHandlingReturned.await(1, TimeUnit.SECONDS)
             sdk.shutdown()
         }
+    }
+
+    @Test
+    fun `app background persistence wait is bounded`() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val backgroundHandlingReturned = CountDownLatch(1)
+        val elapsedMs = AtomicLong()
+        val storage = FileEventStorage(
+            storageDir = temporaryFolder.newFolder("bounded-background-persistence"),
+            persistenceDelayMs = 0,
+            beforePersist = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            }
+        )
+        val sdk = MostlyGoodMetrics.createForTesting(
+            configuration = MGMConfiguration.Builder("test-api-key")
+                .trackAppLifecycleEvents(false)
+                .build(),
+            storage = storage,
+            networkClient = MockNetworkClient(
+                SendResult.RetryLater(MGMError.ServerError(503, "retry"))
+            )
+        )
+
+        try {
+            Thread {
+                val startedAt = System.nanoTime()
+                sdk.handleAppBackgrounded()
+                elapsedMs.set(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt))
+                backgroundHandlingReturned.countDown()
+            }.start()
+
+            assertTrue(persistenceStarted.await(1, TimeUnit.SECONDS))
+            assertTrue(
+                "Lifecycle handling must return near its short persistence timeout",
+                backgroundHandlingReturned.await(1_500, TimeUnit.MILLISECONDS)
+            )
+            assertTrue("Expected a sub-1.5s lifecycle wait, got ${elapsedMs.get()}ms", elapsedMs.get() < 1_500)
+        } finally {
+            releasePersistence.countDown()
+            sdk.shutdown()
+        }
+    }
+
+    @Test
+    fun `tracking after shutdown does not throw or poison persistence`() {
+        val storage = FileEventStorage(
+            storageDir = temporaryFolder.newFolder("track-after-shutdown"),
+            persistenceDelayMs = 0
+        )
+        val sdk = MostlyGoodMetrics.createForTesting(
+            configuration = MGMConfiguration.Builder("test-api-key")
+                .trackAppLifecycleEvents(false)
+                .build(),
+            storage = storage,
+            networkClient = MockNetworkClient(SendResult.Success)
+        )
+
+        sdk.shutdown()
+        sdk.track("after_shutdown")
+
+        val startedAt = System.nanoTime()
+        assertFalse(storage.awaitPersistence(1_000))
+        val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+        assertTrue("Rejected persistence must fail promptly, got ${elapsedMs}ms", elapsedMs < 250)
+    }
+
+    @Test
+    fun `shutdown unregisters the process lifecycle observer`() {
+        lateinit var registry: LifecycleRegistry
+        val owner = object : LifecycleOwner {
+            override val lifecycle: Lifecycle
+                get() = registry
+        }
+        registry = LifecycleRegistry.createUnsafe(owner)
+        val storage = InMemoryEventStorage()
+        val sdk = MostlyGoodMetrics.createForTesting(
+            configuration = MGMConfiguration.Builder("test-api-key")
+                .trackAppLifecycleEvents(true)
+                .build(),
+            storage = storage,
+            networkClient = MockNetworkClient(SendResult.Success),
+            processLifecycle = registry
+        )
+
+        registry.currentState = Lifecycle.State.STARTED
+        assertEquals(listOf("\$app_opened"), storage.fetchEvents(10).map { it.name })
+        storage.clear()
+
+        sdk.shutdown()
+        registry.currentState = Lifecycle.State.CREATED
+
+        assertTrue(storage.fetchEvents(10).isEmpty())
     }
 
     @Test

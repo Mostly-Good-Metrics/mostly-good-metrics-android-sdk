@@ -4,8 +4,10 @@ import android.content.Context
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
@@ -76,6 +78,7 @@ class FileEventStorage internal constructor(
     private val lock = ReentrantReadWriteLock()
     private val events = ArrayDeque<MGMEvent>()
     private val persistenceRevision = AtomicLong(0)
+    private var persistedRevision = 0L
     private val persistenceMonitor = Object()
     private var persistenceScheduled = false
     private val persistenceExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -148,16 +151,26 @@ class FileEventStorage internal constructor(
      * memory, while serialization and file I/O always happen on the storage thread.
      */
     private fun schedulePersistence() {
-        persistenceRevision.incrementAndGet()
-
         synchronized(persistenceMonitor) {
+            persistenceRevision.incrementAndGet()
             if (persistenceScheduled) return
             persistenceScheduled = true
-            persistenceExecutor.schedule(
-                ::persistLatestSnapshot,
-                persistenceDelayMs,
-                TimeUnit.MILLISECONDS
-            )
+            var accepted = false
+            try {
+                persistenceExecutor.schedule(
+                    ::persistLatestSnapshot,
+                    persistenceDelayMs,
+                    TimeUnit.MILLISECONDS
+                )
+                accepted = true
+            } catch (error: RejectedExecutionException) {
+                MGMLogger.error("Failed to schedule event persistence: ${error.message}")
+            } finally {
+                if (!accepted) {
+                    persistenceScheduled = false
+                    persistenceMonitor.notifyAll()
+                }
+            }
         }
     }
 
@@ -166,9 +179,13 @@ class FileEventStorage internal constructor(
             val revision = persistenceRevision.get()
             val snapshot = lock.read { events.toList() }
             beforePersist?.invoke()
-            saveToDisk(snapshot)
+            val persisted = saveToDisk(snapshot)
 
             synchronized(persistenceMonitor) {
+                if (persisted) {
+                    persistedRevision = revision
+                    persistenceMonitor.notifyAll()
+                }
                 if (persistenceRevision.get() == revision) {
                     persistenceScheduled = false
                     persistenceMonitor.notifyAll()
@@ -178,8 +195,8 @@ class FileEventStorage internal constructor(
         }
     }
 
-    private fun saveToDisk(snapshot: List<MGMEvent>) {
-        try {
+    private fun saveToDisk(snapshot: List<MGMEvent>): Boolean {
+        return try {
             if (!storageDir.exists()) {
                 storageDir.mkdirs()
             }
@@ -189,10 +206,14 @@ class FileEventStorage internal constructor(
             // Atomic write using temp file
             val tempFile = File(storageDir, "events.json.tmp")
             tempFile.writeText(content)
-            tempFile.renameTo(storageFile)
+            if (!tempFile.renameTo(storageFile)) {
+                throw IOException("Failed to replace persisted event store")
+            }
+            true
         } catch (e: Exception) {
             // Silent failure - events remain in memory
             MGMLogger.error("Failed to save events to disk: ${e.message}")
+            false
         }
     }
 
@@ -203,12 +224,15 @@ class FileEventStorage internal constructor(
      * before the normal coalescing delay expires.
      *
      * @return true when persistence completed, or false when [timeoutMs] elapsed
+     *         or persistence can no longer be scheduled
      */
     @JvmOverloads
     fun awaitPersistence(timeoutMs: Long = 5_000): Boolean {
         val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         synchronized(persistenceMonitor) {
-            while (persistenceScheduled) {
+            val targetRevision = persistenceRevision.get()
+            while (persistedRevision < targetRevision) {
+                if (!persistenceScheduled) return false
                 val remainingNanos = deadlineNanos - System.nanoTime()
                 if (remainingNanos <= 0) return false
                 TimeUnit.NANOSECONDS.timedWait(persistenceMonitor, remainingNanos)
