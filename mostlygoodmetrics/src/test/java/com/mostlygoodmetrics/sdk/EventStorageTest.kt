@@ -2,12 +2,18 @@ package com.mostlygoodmetrics.sdk
 
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class EventStorageTest {
+
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
 
     private lateinit var storage: InMemoryEventStorage
 
@@ -126,6 +132,23 @@ class EventStorageTest {
 
         assertEquals(1, storage.eventCount())
         assertEquals("test3", storage.fetchEvents(10)[0].name)
+    }
+
+    @Test
+    fun `removeEvents keys removal on client event id`() {
+        val acknowledged = createTestEvent("duplicate").copy(
+            clientEventId = "acknowledged-id",
+            timestamp = "2024-01-01T00:00:00.000Z"
+        )
+        val unacknowledged = acknowledged.copy(clientEventId = "unacknowledged-id")
+        storage.store(acknowledged)
+        storage.store(unacknowledged)
+
+        storage.removeEvents(listOf(acknowledged.copy(name = "server_copy")))
+
+        val remaining = storage.fetchEvents(10)
+        assertEquals(1, remaining.size)
+        assertEquals("unacknowledged-id", remaining.single().clientEventId)
     }
 
     @Test
@@ -317,6 +340,90 @@ class EventStorageTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS))
         // Should complete without exceptions
+    }
+
+    // MARK: - File Persistence Tests
+
+    @Test
+    fun `file persistence never blocks the calling thread`() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val storage = FileEventStorage(
+            storageDir = temporaryFolder.newFolder("non-blocking"),
+            persistenceDelayMs = 0,
+            beforePersist = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            }
+        )
+
+        try {
+            val storeReturned = CountDownLatch(1)
+            Thread {
+                storage.store(createTestEvent("main_thread_event"))
+                storeReturned.countDown()
+            }.start()
+
+            assertTrue(persistenceStarted.await(1, TimeUnit.SECONDS))
+            assertTrue(
+                "store() must return while persistence is still blocked",
+                storeReturned.await(1, TimeUnit.SECONDS)
+            )
+        } finally {
+            releasePersistence.countDown()
+            storage.closeForTesting()
+        }
+    }
+
+    @Test
+    fun `file persistence coalesces a burst into one JSON rewrite`() {
+        val writes = AtomicInteger(0)
+        val directory = temporaryFolder.newFolder("coalesced")
+        val storage = FileEventStorage(
+            storageDir = directory,
+            persistenceDelayMs = 100,
+            beforePersist = { writes.incrementAndGet() }
+        )
+
+        try {
+            repeat(100) { storage.store(createTestEvent("event$it")) }
+
+            assertTrue(storage.awaitPersistence())
+            assertEquals(1, writes.get())
+
+            val contents = File(directory, "events.json").readText()
+            assertTrue(contents.startsWith("["))
+            assertTrue(contents.endsWith("]"))
+            assertEquals(100, kotlinx.serialization.json.Json.decodeFromString<List<MGMEvent>>(contents).size)
+        } finally {
+            storage.closeForTesting()
+        }
+    }
+
+    @Test
+    fun `file storage removes only the matching client event id`() {
+        val directory = temporaryFolder.newFolder("stable-id-removal")
+        val storage = FileEventStorage(storageDir = directory, persistenceDelayMs = 0)
+        val acknowledged = createTestEvent("duplicate").copy(
+            clientEventId = "acknowledged-id",
+            timestamp = "2024-01-01T00:00:00.000Z"
+        )
+        val unacknowledged = acknowledged.copy(clientEventId = "unacknowledged-id")
+
+        storage.store(acknowledged)
+        storage.store(unacknowledged)
+        storage.removeEvents(listOf(acknowledged.copy(name = "server_copy")))
+        assertTrue(storage.awaitPersistence())
+        storage.closeForTesting()
+
+        val reloaded = FileEventStorage(storageDir = directory, persistenceDelayMs = 0)
+        try {
+            val remaining = reloaded.fetchEvents(10)
+            assertEquals(1, remaining.size)
+            assertEquals("unacknowledged-id", remaining.single().clientEventId)
+        } finally {
+            reloaded.closeForTesting()
+        }
     }
 
     // MARK: - Edge Cases

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.Date
 
 class MGMEventTest {
 
@@ -156,6 +157,16 @@ class MGMEventTest {
         // Should match ISO 8601 format: YYYY-MM-DDTHH:MM:SS.sssZ
         val timestamp = event!!.timestamp
         assertTrue(timestamp.matches(Regex("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z")))
+    }
+
+    @Test
+    fun `createAt formats the caller timestamp`() {
+        val event = MGMEvent.createAt(
+            name = "test",
+            timestamp = Date(1_704_067_200_123)
+        )
+
+        assertEquals("2024-01-01T00:00:00.123Z", event?.timestamp)
     }
 
     @Test

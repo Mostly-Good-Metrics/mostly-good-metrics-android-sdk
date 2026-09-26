@@ -16,6 +16,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -391,10 +392,13 @@ class MostlyGoodMetrics private constructor(
 
         validateDebugProperties(name, properties)
 
+        // Capture caller time before collecting context or queueing persistence.
+        val trackedAt = Date()
         val mergedProperties = buildProperties(properties)
 
-        val event = MGMEvent.create(
+        val event = MGMEvent.createAt(
             name = name,
+            timestamp = trackedAt,
             userId = effectiveUserId,
             sessionId = sessionId,
             platform = PLATFORM,
@@ -1034,6 +1038,7 @@ class MostlyGoodMetrics private constructor(
         MGMLogger.info("Shutting down MostlyGoodMetrics SDK")
         flushJob?.cancel()
         scope.cancel()
+        (storage as? CloseableEventStorage)?.close()
     }
 
     companion object {
