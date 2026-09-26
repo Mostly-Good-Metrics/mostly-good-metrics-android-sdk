@@ -49,10 +49,13 @@ data class MGMEvent(
         // Regex pattern: starts with letter (or $ for system events), allows spaces between words.
         private val EVENT_NAME_PATTERN = Regex("^\\$?[a-zA-Z](?:[a-zA-Z0-9_ ]*[a-zA-Z0-9_])?$")
 
-        private val iso8601Format: SimpleDateFormat
-            get() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+        private val iso8601Format =
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
                 timeZone = TimeZone.getTimeZone("UTC")
             }
+
+        private fun format(timestamp: Date): String =
+            synchronized(iso8601Format) { iso8601Format.format(timestamp) }
 
         /**
          * Validates an event name.
@@ -81,6 +84,36 @@ data class MGMEvent(
             locale: String? = null,
             timezone: String? = null,
             properties: Map<String, Any?>? = null
+        ): MGMEvent? = createAt(
+            name = name,
+            timestamp = Date(),
+            userId = userId,
+            sessionId = sessionId,
+            platform = platform,
+            appVersion = appVersion,
+            appBuildNumber = appBuildNumber,
+            osVersion = osVersion,
+            environment = environment,
+            deviceManufacturer = deviceManufacturer,
+            locale = locale,
+            timezone = timezone,
+            properties = properties
+        )
+
+        internal fun createAt(
+            name: String,
+            timestamp: Date,
+            userId: String? = null,
+            sessionId: String? = null,
+            platform: String? = null,
+            appVersion: String? = null,
+            appBuildNumber: String? = null,
+            osVersion: String? = null,
+            environment: String? = null,
+            deviceManufacturer: String? = null,
+            locale: String? = null,
+            timezone: String? = null,
+            properties: Map<String, Any?>? = null
         ): MGMEvent? {
             if (!isValidEventName(name)) {
                 return null
@@ -91,7 +124,7 @@ data class MGMEvent(
             return MGMEvent(
                 name = name,
                 clientEventId = UUID.randomUUID().toString(),
-                timestamp = iso8601Format.format(Date()),
+                timestamp = format(timestamp),
                 userId = userId,
                 sessionId = sessionId,
                 platform = platform,

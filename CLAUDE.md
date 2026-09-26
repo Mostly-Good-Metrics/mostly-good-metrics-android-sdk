@@ -24,6 +24,23 @@ After creating a PR:
 - Keep changes focused - one feature/fix per PR
 - Update documentation if adding new public APIs
 
+### Storage Performance Regression
+
+The always-on `EventStorageTest` coverage proves file persistence cannot block
+the caller and that bursts are coalesced; it runs in the ordinary CI unit-test
+task with no environment-variable gate. To measure `track()` on an emulator in
+a release variant, run:
+
+```bash
+./gradlew :mostlygoodmetrics:connectedReleaseAndroidTest
+```
+
+`MainThreadStorageBenchmarkTest` preloads 100, 1,000, and 10,000 events and
+asserts that median main-thread latency stays below 5 ms. This connected test is
+manual and does not run in CI; the always-on JVM tests are the regression gate.
+Because the module sets `testBuildType = "release"`, Gradle provides
+`connectedReleaseAndroidTest` instead of `connectedDebugAndroidTest`.
+
 ### 4. Public API Changes
 
 **DO NOT change public-facing APIs without explicit approval.**

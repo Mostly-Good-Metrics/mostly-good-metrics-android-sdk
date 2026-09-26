@@ -15,6 +15,11 @@ version = "0.6.0"
 android {
     namespace = "com.mostlygoodmetrics.sdk"
     compileSdk = 34
+    testBuildType = "release"
+
+    testOptions {
+        targetSdk = 34
+    }
 
     defaultConfig {
         minSdk = 21

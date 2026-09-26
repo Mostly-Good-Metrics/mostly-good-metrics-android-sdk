@@ -298,9 +298,15 @@ The SDK automatically handles the following without any additional configuration
 **Thread Safety:**
 
 The SDK is fully thread-safe. All methods can be called from any thread:
-- Event tracking uses internal queues for safe concurrent access
+- `track()` captures the complete event, including its timestamp, on the calling thread
+- Disk serialization and atomic JSON-array rewrites are coalesced on a background storage thread
+- App backgrounding waits up to 750 ms for `$app_backgrounded` to reach disk before starting the network flush
 - Flush operations are serialized to prevent race conditions
 - Storage operations are atomic
+
+Custom integrations that construct `FileEventStorage` directly can call
+`awaitPersistence()` at their own lifecycle boundaries; it returns `false` if
+the pending write does not complete before its timeout.
 
 ## Automatic Events
 
