@@ -320,6 +320,61 @@ class HostSafetyStressTest {
         } finally { sdk.shutdown() }
     }
 
+    @Test
+    fun `provider cancellation exception is contained on a non suspending caller and recovery works`() {
+        var fail = true
+        val configuration = MGMConfiguration.Builder("offline-test-key")
+            .trackAppLifecycleEvents(false)
+            .contextProvider {
+                if (fail) throw kotlinx.coroutines.CancellationException("host provider cancelled")
+                mapOf("recovered" to true)
+            }.build()
+        val storage = InMemoryEventStorage()
+        val sdk = MostlyGoodMetrics.createForTesting(configuration, storage, MockNetworkClient(SendResult.Success))
+        try {
+            sdk.track("provider_failure")
+            fail = false
+            sdk.track("provider_recovered")
+            val events = storage.fetchEvents(10)
+            assertEquals(listOf("provider_failure", "provider_recovered"), events.map { it.name })
+            assertEquals("true", events.last().properties?.get("recovered").toString())
+        } finally { sdk.shutdown() }
+    }
+
+    @Test
+    fun `posted main lifecycle cancellation is contained outside SDK coroutine`() {
+        val actions = mutableListOf<() -> Unit>()
+        val lifecycle = object : Lifecycle() {
+            override val currentState: State get() = State.CREATED
+            override fun addObserver(observer: LifecycleObserver) { throw kotlinx.coroutines.CancellationException("host registration cancelled") }
+            override fun removeObserver(observer: LifecycleObserver) { throw kotlinx.coroutines.CancellationException("host removal cancelled") }
+        }
+        val sdk = MostlyGoodMetrics.createForTesting(MGMConfiguration.Builder("offline-key").build(),
+            InMemoryEventStorage(), MockNetworkClient(SendResult.Success), processLifecycle = lifecycle,
+            dispatchLifecycleAction = { action -> actions.add(action) })
+        try {
+            assertEquals(1, actions.size)
+            actions.removeAt(0).invoke()
+            sdk.track("main_action_recovered")
+            sdk.shutdown()
+            assertEquals(1, actions.size)
+            actions.removeAt(0).invoke()
+        } finally { sdk.shutdown() }
+    }
+
+    @Test
+    fun `main dispatcher cancellation is contained at non suspending dispatch boundary`() {
+        val lifecycle = object : Lifecycle() {
+            override val currentState: State get() = State.CREATED
+            override fun addObserver(observer: LifecycleObserver) = Unit
+            override fun removeObserver(observer: LifecycleObserver) = Unit
+        }
+        val sdk = MostlyGoodMetrics.createForTesting(MGMConfiguration.Builder("offline-key").build(),
+            InMemoryEventStorage(), MockNetworkClient(SendResult.Success), processLifecycle = lifecycle,
+            dispatchLifecycleAction = { throw kotlinx.coroutines.CancellationException("host dispatcher cancelled") })
+        try { sdk.track("dispatch_recovered") } finally { sdk.shutdown() }
+    }
+
     private data class Response(val body: String, val status: Int = 200, val headers: String = "")
 
     private class LoopbackServer(private val respond: (String) -> Response) : java.io.Closeable {

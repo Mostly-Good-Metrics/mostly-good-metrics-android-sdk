@@ -1058,9 +1058,9 @@ class MostlyGoodMetrics private constructor(
             contextProviderActive.set(true)
             try {
                 configuration.contextProvider?.invoke()?.let(::snapshotProperties).orEmpty()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (e: Exception) {
+                // This synchronous consumer callback does not cancel an SDK
+                // coroutine; contain CancellationException here as well.
                 MGMLogger.warn("Context provider failed; tracking event without dynamic context: ${e.message}")
                 emptyMap()
             } finally {
@@ -1161,14 +1161,15 @@ class MostlyGoodMetrics private constructor(
     }
 
     private fun dispatchMainAction(action: () -> Unit) {
+        // Host actions run on the main looper, outside a suspended SDK
+        // operation. Callback cancellation exceptions cannot cancel that
+        // operation and are contained like other callback failures.
         try {
             dispatchLifecycleAction {
                 try { action() }
-                catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { MGMLogger.error("Analytics main-thread action failed", error) }
             }
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { MGMLogger.error("Cannot dispatch analytics main-thread action", error) }
+        } catch (error: Exception) { MGMLogger.error("Cannot dispatch analytics main-thread action", error) }
     }
 
     private fun <T> readPreference(fallback: T, read: (SharedPreferences) -> T): T = try {

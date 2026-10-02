@@ -572,8 +572,10 @@ Events are automatically flushed periodically and when the app backgrounds. You 
 Flush work runs in the background. Completion callbacks are delivered on the
 Android main thread for every completed flush attempt, including opted-out and
 empty-queue cases. Callback exceptions are logged when debug logging is enabled
-and contained. A cancelled operation (including SDK shutdown) does not report
-success. Callback delivery changed from a background/caller thread; move any
+and contained, including `CancellationException` thrown by the consumer callback.
+Cancellation from a synchronous context provider or a main-thread lifecycle hook
+is also contained at that callback boundary. A cancelled SDK operation (including
+SDK shutdown) does not report success. Callback delivery changed from a background/caller thread; move any
 expensive completion work to your own background executor.
 
 ```kotlin
