@@ -79,6 +79,7 @@ class MostlyGoodMetrics private constructor(
     private val scope = CoroutineScope(SupervisorJob() + backgroundDispatcher + exceptionHandler)
     private var flushJob: Job? = null
     private val isFlushing = AtomicBoolean(false)
+    private val automaticFlushQueued = AtomicBoolean(false)
     private val contextProviderActive = object : ThreadLocal<Boolean>() {
         override fun initialValue(): Boolean = false
     }
@@ -152,7 +153,8 @@ class MostlyGoodMetrics private constructor(
      * Number of events waiting to be sent.
      */
     val pendingEventCount: Int
-        get() = storage.eventCount()
+        get() = try { storage.eventCount() }
+        catch (error: Exception) { MGMLogger.error("Failed to read pending event count", error); 0 }
 
     /**
      * Whether events are currently being flushed.
@@ -271,6 +273,7 @@ class MostlyGoodMetrics private constructor(
     private fun loadCachedConfigs(): List<MGMExperimentConfig> {
         val json = readPreference(null) { it.getString(KEY_EXPERIMENT_CONFIGS, null) } ?: return emptyList()
         return try {
+            if (!JsonSafety.isSafe(json)) return emptyList()
             val array = org.json.JSONArray(json)
             val configs = mutableListOf<MGMExperimentConfig>()
             for (i in 0 until array.length()) {
@@ -374,6 +377,7 @@ class MostlyGoodMetrics private constructor(
     private fun loadCachedVariants(userId: String): Map<String, String> {
         val json = readPreference(null) { it.getString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, null) } ?: return emptyMap()
         return try {
+            if (!JsonSafety.isSafe(json)) return emptyMap()
             val jsonObject = org.json.JSONObject(json)
             val variants = mutableMapOf<String, String>()
             val keys = jsonObject.keys()
@@ -446,7 +450,7 @@ class MostlyGoodMetrics private constructor(
 
                 // Auto-flush if batch size reached
                 if (storage.eventCount() >= configuration.maxBatchSize) {
-                    flush()
+                    requestAutomaticFlush()
                 }
             }
         } catch (cancelled: CancellationException) {
@@ -682,6 +686,7 @@ class MostlyGoodMetrics private constructor(
     fun getSuperProperties(): Map<String, Any?> {
         val json = readPreference(null) { it.getString(KEY_SUPER_PROPERTIES, null) } ?: return emptyMap()
         return try {
+            if (!JsonSafety.isSafe(json)) return emptyMap()
             @Suppress("UNCHECKED_CAST")
             org.json.JSONObject(json).toMap()
         } catch (e: Exception) {
@@ -858,12 +863,23 @@ class MostlyGoodMetrics private constructor(
 
     private fun deliverFlushCompletion(completion: ((Result<Unit>) -> Unit)?, result: Result<Unit>) {
         if (completion == null) return
-        dispatchLifecycleAction {
+        dispatchMainAction {
+            // This non-suspending consumer callback executes on the Android
+            // main looper, outside the sending coroutine. Its exception is
+            // not cancellation of the SDK's suspended network operation.
             try {
                 completion(result)
             } catch (error: Exception) {
                 MGMLogger.error("Flush completion failed", error)
             }
+        }
+    }
+
+    private fun requestAutomaticFlush() {
+        if (!automaticFlushQueued.compareAndSet(false, true)) return
+        scope.launch {
+            try { performFlush() }
+            finally { automaticFlushQueued.set(false) }
         }
     }
 
@@ -970,7 +986,7 @@ class MostlyGoodMetrics private constructor(
         lifecycleObserver = observer
 
         // Must be called on main thread
-        dispatchLifecycleAction {
+        dispatchMainAction {
             if (lifecycleObserver === observer) {
                 processLifecycle?.addObserver(observer)
             }
@@ -1131,7 +1147,7 @@ class MostlyGoodMetrics private constructor(
         MGMLogger.info("Shutting down MostlyGoodMetrics SDK")
         lifecycleObserver?.let { observer ->
             lifecycleObserver = null
-            dispatchLifecycleAction {
+            dispatchMainAction {
                 processLifecycle?.removeObserver(observer)
             }
         }
@@ -1142,6 +1158,17 @@ class MostlyGoodMetrics private constructor(
         } catch (error: Exception) {
             MGMLogger.error("Failed to close analytics storage", error)
         }
+    }
+
+    private fun dispatchMainAction(action: () -> Unit) {
+        try {
+            dispatchLifecycleAction {
+                try { action() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { MGMLogger.error("Analytics main-thread action failed", error) }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { MGMLogger.error("Cannot dispatch analytics main-thread action", error) }
     }
 
     private fun <T> readPreference(fallback: T, read: (SharedPreferences) -> T): T = try {
@@ -1236,37 +1263,43 @@ class MostlyGoodMetrics private constructor(
          */
         @JvmStatic
         fun configure(context: Context, configuration: MGMConfiguration) {
-            synchronized(this) {
-                if (instance != null) {
-                    MGMLogger.warn("MostlyGoodMetrics already configured, ignoring")
-                    return
-                }
+            try {
+                synchronized(this) {
+                    if (instance != null) {
+                        MGMLogger.warn("MostlyGoodMetrics already configured, ignoring")
+                        return
+                    }
 
-                val appContext = context.applicationContext
-                val configWithPackage = if (configuration.packageName == null) {
-                    MGMConfiguration.Builder(configuration.apiKey)
-                        .baseUrl(configuration.baseUrl)
-                        .environment(configuration.environment)
-                        .packageName(appContext.packageName)
-                        .maxBatchSize(configuration.maxBatchSize)
-                        .flushIntervalSeconds(configuration.flushIntervalSeconds)
-                        .maxStoredEvents(configuration.maxStoredEvents)
-                        .enableDebugLogging(configuration.enableDebugLogging)
-                        .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
-                        .optedOutByDefault(configuration.optedOutByDefault)
-                        .collectDeviceProperties(configuration.collectDeviceProperties)
-                        .existingInstallation(configuration.existingInstallation)
-                        .contextProvider(configuration.contextProvider)
-                        .wrapperName(configuration.wrapperName)
-                        .wrapperVersion(configuration.wrapperVersion)
-                        .experimentMode(configuration.experimentMode)
-                        .localExperiments(configuration.localExperiments)
-                        .build()
-                } else {
-                    configuration
-                }
+                    val appContext = context.applicationContext
+                    val configWithPackage = if (configuration.packageName == null) {
+                        MGMConfiguration.Builder(configuration.apiKey)
+                            .baseUrl(configuration.baseUrl)
+                            .environment(configuration.environment)
+                            .packageName(appContext.packageName)
+                            .maxBatchSize(configuration.maxBatchSize)
+                            .flushIntervalSeconds(configuration.flushIntervalSeconds)
+                            .maxStoredEvents(configuration.maxStoredEvents)
+                            .enableDebugLogging(configuration.enableDebugLogging)
+                            .trackAppLifecycleEvents(configuration.trackAppLifecycleEvents)
+                            .optedOutByDefault(configuration.optedOutByDefault)
+                            .collectDeviceProperties(configuration.collectDeviceProperties)
+                            .existingInstallation(configuration.existingInstallation)
+                            .contextProvider(configuration.contextProvider)
+                            .wrapperName(configuration.wrapperName)
+                            .wrapperVersion(configuration.wrapperVersion)
+                            .experimentMode(configuration.experimentMode)
+                            .localExperiments(configuration.localExperiments)
+                            .build()
+                    } else {
+                        configuration
+                    }
 
-                instance = MostlyGoodMetrics(appContext, configWithPackage)
+                    instance = MostlyGoodMetrics(appContext, configWithPackage)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                MGMLogger.error("Could not configure analytics; SDK remains unavailable", error)
             }
         }
 

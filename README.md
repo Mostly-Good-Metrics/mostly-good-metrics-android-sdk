@@ -319,6 +319,28 @@ Custom integrations that construct `FileEventStorage` directly can call
 `awaitPersistence()` at their own lifecycle boundaries; it returns `false` if
 the pending write does not complete before its timeout.
 
+SDK queues also have a private conservative **1 MiB retained-event budget**.
+Oldest events rotate when either that budget or `maxStoredEvents` is reached.
+The byte estimate includes event strings and JSON node overhead; it is not an
+exact process heap measurement. A cached queue above 1 MiB, nesting above 16,
+or excessive JSON node count is discarded before recursive parsing. Fresh
+tracking continues after rejecting a damaged cache. Automatic flush requests
+from event bursts are coalesced into one queued background task.
+
+The always-on `CrashSafetyTest` and `HostSafetyStressTest` cover these failure
+boundaries with deterministic executors, real concurrent threads, actual file
+I/O, cancellation, and loopback HTTP responses (no production traffic):
+
+| Boundary | Failure behavior |
+|---|---|
+| Configuration | Ordinary Android context/startup failures leave the shared SDK unavailable; explicit builder validation still rejects a blank API key |
+| Tracking and properties | Provider, malformed map/value and storage exceptions are contained; reentrant providers skip nested context; cyclic/wide/deep input is bounded |
+| Identity, privacy and saved preferences | Bad saved types use safe defaults; unreadable consent starts opted out; failed writes retain the current in-memory choice |
+| Flush and completion | Network/storage exceptions retain unsent events; completion runs on main with exception containment; coroutine cancellation remains cancellation |
+| Experiments and readiness | Failed background loads complete readiness; excessively nested/large saved or remote JSON is rejected |
+| Timers and persistence | Automatic jobs coalesce; disk failures can recover; an interrupted persistence wait returns false and restores the thread's interrupt flag |
+| Lifecycle and teardown | Main dispatcher, observer registration/removal and close failures are contained |
+
 ## Automatic Events
 
 When `trackAppLifecycleEvents` is enabled (default), the SDK automatically tracks:
@@ -398,7 +420,9 @@ MostlyGoodMetrics.track("checkout", mapOf(
 - Nesting depth: max 3 levels
 - Conversion traverses at most 1024 property nodes per event, including keys;
   values beyond that budget are omitted to bound cyclic or excessively wide input
-- Total properties size: max 10KB
+- Total properties size: max 10KB; larger property dictionaries are omitted
+  while event metadata is retained
+- Property keys above 1000 characters are omitted
 
 ## Super Properties
 

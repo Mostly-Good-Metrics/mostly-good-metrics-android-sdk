@@ -143,8 +143,13 @@ data class MGMEvent(
         /**
          * Converts a Map to JsonObject with proper type handling and truncation.
          */
-        internal fun convertToJsonObject(map: Map<*, *>, depth: Int = 0): JsonObject? =
-            convertToJsonObject(map, depth, PropertyBudget())
+        internal fun convertToJsonObject(map: Map<*, *>, depth: Int = 0): JsonObject? = try {
+            val converted = convertToJsonObject(map, depth, PropertyBudget())
+            if (converted != null && JsonSafety.isSafe(converted.toString(), MAX_PROPERTIES_SIZE_BYTES)) converted else null
+        } catch (error: Exception) {
+            MGMLogger.warn("Failed to convert event properties: ${error.message}")
+            null
+        }
 
         // A depth limit alone still expands wide cyclic graphs exponentially.
         // Share one node budget across the entire event, not one per container.
@@ -161,7 +166,7 @@ data class MGMEvent(
             return buildJsonObject {
                 for ((key, value) in map) {
                     if (!budget.consume()) break
-                    if (key is String) put(key, convertToJsonElement(value, depth, budget))
+                    if (key is String && key.length <= MAX_STRING_PROPERTY_LENGTH) put(key, convertToJsonElement(value, depth, budget))
                 }
             }
         }
