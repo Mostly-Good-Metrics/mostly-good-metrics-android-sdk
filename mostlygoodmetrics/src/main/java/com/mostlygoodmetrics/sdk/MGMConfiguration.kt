@@ -147,7 +147,10 @@ class MGMConfiguration private constructor(
          * Provide dynamic properties evaluated every time an event is tracked.
          * Context properties override super properties; explicit event
          * properties override context; MGM system properties always win.
-         * Exceptions are ignored so analytics never disrupts the host app.
+         * Runs synchronously on the thread calling track(), potentially from
+         * multiple threads concurrently. Use immutable snapshots or synchronized
+         * state; do not directly read Android UI state. Ordinary exceptions are
+         * ignored and the event is tracked without the dynamic context.
          */
         fun contextProvider(provider: (() -> Map<String, Any?>)?) = apply {
             this.contextProvider = provider

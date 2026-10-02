@@ -58,7 +58,11 @@ class MainThreadStorageBenchmarkTest {
         File(storageDir, "events.json").writeText(json.encodeToString(events))
 
         val storage = FileEventStorage(context, MGMConfiguration.DEFAULT_MAX_STORED_EVENTS)
-        check(storage.eventCount() == eventCount)
+        if (File(storageDir, "events.json").length() > JsonSafety.MAX_CACHE_BYTES) {
+            check(storage.eventCount() == 0) { "Oversized cache must be rejected before loading" }
+        } else {
+            check(storage.eventCount() == eventCount)
+        }
         val configuration = MGMConfiguration.Builder("benchmark")
             .maxBatchSize(1_000)
             .maxStoredEvents(MGMConfiguration.DEFAULT_MAX_STORED_EVENTS)

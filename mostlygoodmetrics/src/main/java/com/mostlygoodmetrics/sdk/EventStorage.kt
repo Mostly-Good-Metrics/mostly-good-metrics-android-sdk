@@ -77,6 +77,8 @@ class FileEventStorage internal constructor(
     private val storageFile: File = File(storageDir, "events.json")
     private val lock = ReentrantReadWriteLock()
     private val events = ArrayDeque<MGMEvent>()
+    private val eventWeights = ArrayDeque<Int>()
+    private var retainedBytes = 0L
     private val persistenceRevision = AtomicLong(0)
     private var persistedRevision = 0L
     private val persistenceMonitor = Object()
@@ -90,12 +92,16 @@ class FileEventStorage internal constructor(
     }
 
     override fun store(event: MGMEvent) {
+        val weight = EventMemoryBudget.weight(event) ?: return
         lock.write {
             events.addLast(event)
+            eventWeights.addLast(weight)
+            retainedBytes += weight
 
             // Rotate if we exceed max events (FIFO - drop oldest)
-            while (events.size > maxEvents) {
+            while (events.size > maxEvents.coerceAtLeast(0) || retainedBytes > EventMemoryBudget.MAX_BYTES) {
                 events.removeFirst()
+                retainedBytes -= eventWeights.removeFirst()
             }
         }
         schedulePersistence()
@@ -110,7 +116,17 @@ class FileEventStorage internal constructor(
     override fun removeEvents(events: List<MGMEvent>) {
         val eventIds = events.mapTo(mutableSetOf()) { it.clientEventId }
         lock.write {
-            this.events.removeAll { it.clientEventId in eventIds }
+            val eventIterator = this.events.iterator()
+            val weightIterator = eventWeights.iterator()
+            while (eventIterator.hasNext()) {
+                val event = eventIterator.next()
+                val weight = weightIterator.next()
+                if (event.clientEventId in eventIds) {
+                    eventIterator.remove()
+                    weightIterator.remove()
+                    retainedBytes -= weight
+                }
+            }
         }
         schedulePersistence()
     }
@@ -124,6 +140,8 @@ class FileEventStorage internal constructor(
     override fun clear() {
         lock.write {
             events.clear()
+            eventWeights.clear()
+            retainedBytes = 0
         }
         schedulePersistence()
     }
@@ -132,11 +150,41 @@ class FileEventStorage internal constructor(
         lock.write {
             try {
                 if (storageFile.exists()) {
-                    val content = storageFile.readText()
+                    if (storageFile.length() > JsonSafety.MAX_CACHE_BYTES) {
+                        MGMLogger.warn("Ignoring oversized analytics cache")
+                        return@write
+                    }
+                    // Read at most one byte beyond the limit, including if a
+                    // concurrent writer grows the file after the size check.
+                    val content = storageFile.inputStream().use { stream ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(4096)
+                        while (output.size() <= JsonSafety.MAX_CACHE_BYTES) {
+                            val count = stream.read(buffer, 0, minOf(buffer.size, JsonSafety.MAX_CACHE_BYTES + 1 - output.size()))
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString("UTF-8")
+                    }
+                    if (!JsonSafety.isSafe(content, JsonSafety.MAX_CACHE_BYTES)) {
+                        MGMLogger.warn("Ignoring oversized or excessively nested analytics cache")
+                        return@write
+                    }
                     if (content.isNotBlank()) {
                         val loadedEvents: List<MGMEvent> = json.decodeFromString(content)
                         events.clear()
-                        events.addAll(loadedEvents)
+                        eventWeights.clear()
+                        retainedBytes = 0
+                        for (event in loadedEvents.takeLast(maxEvents.coerceAtLeast(0))) {
+                            val weight = EventMemoryBudget.weight(event) ?: continue
+                            events.addLast(event)
+                            eventWeights.addLast(weight)
+                            retainedBytes += weight
+                            while (retainedBytes > EventMemoryBudget.MAX_BYTES) {
+                                events.removeFirst()
+                                retainedBytes -= eventWeights.removeFirst()
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -235,7 +283,12 @@ class FileEventStorage internal constructor(
                 if (!persistenceScheduled) return false
                 val remainingNanos = deadlineNanos - System.nanoTime()
                 if (remainingNanos <= 0) return false
-                TimeUnit.NANOSECONDS.timedWait(persistenceMonitor, remainingNanos)
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(persistenceMonitor, remainingNanos)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
             }
         }
         return true
@@ -265,13 +318,19 @@ class InMemoryEventStorage(
 
     private val lock = ReentrantReadWriteLock()
     private val events: MutableList<MGMEvent> = mutableListOf()
+    private val eventWeights: MutableList<Int> = mutableListOf()
+    private var retainedBytes = 0L
 
     override fun store(event: MGMEvent) {
+        val weight = EventMemoryBudget.weight(event) ?: return
         lock.write {
             events.add(event)
+            eventWeights.add(weight)
+            retainedBytes += weight
 
-            while (events.size > maxEvents) {
+            while (events.size > maxEvents.coerceAtLeast(0) || retainedBytes > EventMemoryBudget.MAX_BYTES) {
                 events.removeAt(0)
+                retainedBytes -= eventWeights.removeAt(0)
             }
         }
     }
@@ -285,7 +344,17 @@ class InMemoryEventStorage(
     override fun removeEvents(events: List<MGMEvent>) {
         val eventIds = events.mapTo(mutableSetOf()) { it.clientEventId }
         lock.write {
-            this.events.removeAll { it.clientEventId in eventIds }
+            val eventIterator = this.events.iterator()
+            val weightIterator = eventWeights.iterator()
+            while (eventIterator.hasNext()) {
+                val event = eventIterator.next()
+                val weight = weightIterator.next()
+                if (event.clientEventId in eventIds) {
+                    eventIterator.remove()
+                    weightIterator.remove()
+                    retainedBytes -= weight
+                }
+            }
         }
     }
 
@@ -298,6 +367,8 @@ class InMemoryEventStorage(
     override fun clear() {
         lock.write {
             events.clear()
+            eventWeights.clear()
+            retainedBytes = 0
         }
     }
 }

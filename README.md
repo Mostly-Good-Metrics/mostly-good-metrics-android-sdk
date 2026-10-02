@@ -297,16 +297,49 @@ The SDK automatically handles the following without any additional configuration
 
 **Thread Safety:**
 
-The SDK is fully thread-safe. All methods can be called from any thread:
+Configure once before tracking. Tracking and identity methods support calls from
+background threads. Your property maps and context-provider captures must also
+be safe to read from the threads that call the SDK; do not mutate a supplied map
+while tracking it.
 - `track()` captures the complete event, including its timestamp, on the calling thread
 - Disk serialization and atomic JSON-array rewrites are coalesced on a background storage thread
 - App backgrounding waits up to 750 ms for `$app_backgrounded` to reach disk before starting the network flush
 - Flush operations are serialized to prevent race conditions
 - Storage operations are atomic
 
+Ordinary tracking, background-operation, and flush-callback exceptions are
+contained so an analytics failure does not become an uncaught app exception.
+Failed flush attempts keep unsent events available for retry. Unreadable saved
+consent leaves tracking opted out until the app explicitly calls `optIn()`.
+Ordinary preference write failures preserve the current in-memory choice but
+cannot guarantee persistence after a restart. Fatal JVM errors, such as
+out-of-memory conditions, are not suppressed.
+
 Custom integrations that construct `FileEventStorage` directly can call
 `awaitPersistence()` at their own lifecycle boundaries; it returns `false` if
 the pending write does not complete before its timeout.
+
+SDK queues also have a private conservative **1 MiB retained-event budget**.
+Oldest events rotate when either that budget or `maxStoredEvents` is reached.
+The byte estimate includes event strings and JSON node overhead; it is not an
+exact process heap measurement. A cached queue above 1 MiB, nesting above 16,
+or excessive JSON node count is discarded before recursive parsing. Fresh
+tracking continues after rejecting a damaged cache. Automatic flush requests
+from event bursts are coalesced into one queued background task.
+
+The always-on `CrashSafetyTest` and `HostSafetyStressTest` cover these failure
+boundaries with deterministic executors, real concurrent threads, actual file
+I/O, cancellation, and loopback HTTP responses (no production traffic):
+
+| Boundary | Failure behavior |
+|---|---|
+| Configuration | Ordinary Android context/startup failures leave the shared SDK unavailable; explicit builder validation still rejects a blank API key |
+| Tracking and properties | Provider, malformed map/value and storage exceptions are contained; reentrant providers skip nested context; cyclic/wide/deep input is bounded |
+| Identity, privacy and saved preferences | Bad saved types use safe defaults; unreadable consent starts opted out; failed writes retain the current in-memory choice |
+| Flush and completion | Network/storage exceptions retain unsent events; completion runs on main with exception containment; coroutine cancellation remains cancellation |
+| Experiments and readiness | Failed background loads complete readiness; excessively nested/large saved or remote JSON is rejected |
+| Timers and persistence | Automatic jobs coalesce; disk failures can recover; an interrupted persistence wait returns false and restores the thread's interrupt flag |
+| Lifecycle and teardown | Main dispatcher, observer registration/removal and close failures are contained |
 
 ## Automatic Events
 
@@ -385,7 +418,11 @@ MostlyGoodMetrics.track("checkout", mapOf(
 **Limits:**
 - String values: truncated to 1000 characters
 - Nesting depth: max 3 levels
-- Total properties size: max 10KB
+- Conversion traverses at most 1024 property nodes per event, including keys;
+  values beyond that budget are omitted to bound cyclic or excessively wide input
+- Total properties size: max 10KB; larger property dictionaries are omitted
+  while event metadata is retained
+- Property keys above 1000 characters are omitted
 
 ## Super Properties
 
@@ -436,17 +473,24 @@ MostlyGoodMetrics.clearSuperProperties()
 
 ### Dynamic context properties
 
-Use `contextProvider` for values that can change while the app is running, such as the current account, active workspace, or feature-flag state. The provider runs for every event and must be fast; if it throws, MGM tracks the event without that dynamic context.
+Use `contextProvider` for values that can change while the app is running, such as
+the current account or active workspace. It runs synchronously on the thread
+calling `track()` and can be invoked concurrently. Keep it fast and read immutable
+snapshots or synchronized state; do not read Android UI state directly. If the
+provider throws an ordinary exception or its returned map cannot be read, MGM
+tracks the event without that dynamic context. If a provider calls `track()`
+itself, the nested event skips the provider to prevent recursive invocation.
 
 ```kotlin
+val activeWorkspace = java.util.concurrent.atomic.AtomicReference("workspace-a")
 val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
     .contextProvider {
-        mapOf(
-            "active_workspace_id" to currentWorkspaceId(),
-            "subscription_tier" to currentSubscriptionTier()
-        )
+        mapOf("active_workspace_id" to activeWorkspace.get())
     }
     .build()
+
+// When the app changes workspaces, publish the next snapshot.
+activeWorkspace.set("workspace-b")
 ```
 
 Property precedence is deterministic: **super properties < dynamic context < explicit event properties < MGM system properties**. Keys beginning with `$` are reserved for MGM system properties. With `enableDebugLogging(true)`, MGM warns about reserved keys on custom events and invalid event names before dropping them.
@@ -523,7 +567,25 @@ val config = MGMConfiguration.Builder("mgm_proj_your_api_key")
 
 ## Manual Flush
 
-Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush:
+Events are automatically flushed periodically and when the app backgrounds. You can also trigger a manual flush.
+
+Flush work runs in the background. Completion callbacks are delivered on the
+Android main thread for every completed flush attempt, including opted-out and
+empty-queue cases. Callback exceptions are logged when debug logging is enabled
+and contained, including `CancellationException` thrown by the consumer callback.
+Cancellation from a synchronous context provider or a main-thread lifecycle hook
+is also contained at that callback boundary. A cancelled SDK operation (including
+SDK shutdown) does not report success. Callback delivery changed from a background/caller thread; move any
+expensive completion work to your own background executor.
+
+```kotlin
+// Completion can safely update Android UI state.
+MostlyGoodMetrics.flush { result ->
+    result.onSuccess { /* update UI */ }
+}
+```
+
+Logging example:
 
 ```kotlin
 MostlyGoodMetrics.flush { result ->

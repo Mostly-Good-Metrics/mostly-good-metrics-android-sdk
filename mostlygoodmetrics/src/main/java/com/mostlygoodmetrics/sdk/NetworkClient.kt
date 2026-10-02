@@ -204,9 +204,9 @@ class NetworkClient(
         val statusCode = connection.responseCode
         val body = try {
             if (statusCode in 200..299) {
-                connection.inputStream.bufferedReader().use { it.readText() }
+                connection.inputStream.bufferedReader().use { readBoundedBody(it) }
             } else {
-                connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                connection.errorStream?.bufferedReader()?.use { readBoundedBody(it) } ?: ""
             }
         } catch (e: Exception) {
             ""
@@ -233,9 +233,8 @@ class NetworkClient(
             }
             429 -> {
                 val retryAfter = connection.getHeaderField("Retry-After")?.toLongOrNull()
-                if (retryAfter != null) {
-                    retryAfterTime = System.currentTimeMillis() + (retryAfter * 1000)
-                }
+                    ?.takeIf { it in 0..86_400L } ?: 60L
+                retryAfterTime = System.currentTimeMillis() + retryAfter * 1000
                 MGMLogger.warn("Rate limited, retry after: ${retryAfter ?: "unknown"}s")
                 SendResult.RetryLater(MGMError.RateLimited(retryAfter))
             }
@@ -248,6 +247,17 @@ class NetworkClient(
                 SendResult.RetryLater(MGMError.UnexpectedStatusCode(statusCode))
             }
         }
+    }
+
+    private fun readBoundedBody(reader: java.io.Reader): String {
+        val result = StringBuilder()
+        val buffer = CharArray(4096)
+        while (result.length <= JsonSafety.MAX_METADATA_BYTES) {
+            val count = reader.read(buffer, 0, minOf(buffer.size, JsonSafety.MAX_METADATA_BYTES + 1 - result.length))
+            if (count < 0) return result.toString()
+            result.append(buffer, 0, count)
+        }
+        throw IOException("Analytics response body is too large")
     }
 
     private fun gzipCompress(data: ByteArray): ByteArray {
@@ -299,9 +309,9 @@ class NetworkClient(
             val statusCode = connection.responseCode
             val body = try {
                 if (statusCode in 200..299) {
-                    connection.inputStream.bufferedReader().use { it.readText() }
+                    connection.inputStream.bufferedReader().use { readBoundedBody(it) }
                 } else {
-                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    connection.errorStream?.bufferedReader()?.use { readBoundedBody(it) } ?: ""
                 }
             } catch (e: Exception) {
                 ""
@@ -371,9 +381,9 @@ class NetworkClient(
             val statusCode = connection.responseCode
             val body = try {
                 if (statusCode in 200..299) {
-                    connection.inputStream.bufferedReader().use { it.readText() }
+                    connection.inputStream.bufferedReader().use { readBoundedBody(it) }
                 } else {
-                    connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                    connection.errorStream?.bufferedReader()?.use { readBoundedBody(it) } ?: ""
                 }
             } catch (e: Exception) {
                 ""
@@ -418,6 +428,7 @@ class NetworkClient(
      * { "experiments": [ { "id": "<uuid>", "name": "button-color", "variants": ["a", "b"] } ] }
      */
     private fun parseExperimentConfigsResponse(jsonString: String): List<MGMExperimentConfig> {
+        require(JsonSafety.isSafe(jsonString)) { "Analytics response exceeds safe JSON limits" }
         val jsonObject = org.json.JSONObject(jsonString)
         val experimentsArray = jsonObject.optJSONArray("experiments") ?: return emptyList()
 
@@ -446,6 +457,7 @@ class NetworkClient(
      * Expected format: { "assigned_variants": { "experiment-name": "variant" } }
      */
     private fun parseExperimentsResponse(jsonString: String): Map<String, String> {
+        require(JsonSafety.isSafe(jsonString)) { "Analytics response exceeds safe JSON limits" }
         val jsonObject = org.json.JSONObject(jsonString)
         val assignedVariants = jsonObject.optJSONObject("assigned_variants") ?: return emptyMap()
 
