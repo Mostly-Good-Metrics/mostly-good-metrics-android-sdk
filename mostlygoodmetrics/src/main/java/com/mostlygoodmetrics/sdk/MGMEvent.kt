@@ -2,6 +2,7 @@ package com.mostlygoodmetrics.sdk
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -142,35 +143,59 @@ data class MGMEvent(
         /**
          * Converts a Map to JsonObject with proper type handling and truncation.
          */
-        internal fun convertToJsonObject(map: Map<String, Any?>, depth: Int = 0): JsonObject? {
-            if (depth > MAX_PROPERTIES_DEPTH) {
-                return null
-            }
+        internal fun convertToJsonObject(map: Map<*, *>, depth: Int = 0): JsonObject? =
+            convertToJsonObject(map, depth, PropertyBudget())
 
+        // A depth limit alone still expands wide cyclic graphs exponentially.
+        // Share one node budget across the entire event, not one per container.
+        private class PropertyBudget(var remaining: Int = 1024) {
+            fun consume(): Boolean {
+                if (remaining <= 0) return false
+                remaining--
+                return true
+            }
+        }
+
+        private fun convertToJsonObject(map: Map<*, *>, depth: Int, budget: PropertyBudget): JsonObject? {
+            if (depth > MAX_PROPERTIES_DEPTH) return null
             return buildJsonObject {
                 for ((key, value) in map) {
-                    put(key, convertToJsonElement(value, depth))
+                    if (!budget.consume()) break
+                    if (key is String) put(key, convertToJsonElement(value, depth, budget))
                 }
             }
         }
 
-        private fun convertToJsonElement(value: Any?, depth: Int): JsonElement {
-            return when (value) {
-                null -> JsonNull
-                is Boolean -> JsonPrimitive(value)
-                is Number -> JsonPrimitive(value)
-                is String -> JsonPrimitive(truncateString(value))
-                is Map<*, *> -> {
-                    @Suppress("UNCHECKED_CAST")
-                    convertToJsonObject(value as Map<String, Any?>, depth + 1) ?: JsonNull
+        private fun convertToJsonElement(value: Any?, depth: Int, budget: PropertyBudget): JsonElement {
+            if (!budget.consume() || depth > MAX_PROPERTIES_DEPTH) return JsonNull
+            return try {
+                when (value) {
+                    null -> JsonNull
+                    is Boolean -> JsonPrimitive(value)
+                    is Number -> JsonPrimitive(value)
+                    is String -> JsonPrimitive(truncateString(value))
+                    is Map<*, *> -> convertToJsonObject(value, depth + 1, budget) ?: JsonNull
+                    is List<*> -> {
+                        val elements = mutableListOf<JsonElement>()
+                        for (index in 0 until minOf(value.size, budget.remaining)) {
+                            if (budget.remaining <= 0) break
+                            elements.add(convertToJsonElement(value[index], depth + 1, budget))
+                        }
+                        JsonArray(elements)
+                    }
+                    is Array<*> -> {
+                        val elements = mutableListOf<JsonElement>()
+                        for (index in 0 until minOf(value.size, budget.remaining)) {
+                            if (budget.remaining <= 0) break
+                            elements.add(convertToJsonElement(value[index], depth + 1, budget))
+                        }
+                        JsonArray(elements)
+                    }
+                    else -> JsonPrimitive(truncateString(value.toString()))
                 }
-                is List<*> -> {
-                    kotlinx.serialization.json.JsonArray(value.map { convertToJsonElement(it, depth + 1) })
-                }
-                is Array<*> -> {
-                    kotlinx.serialization.json.JsonArray(value.map { convertToJsonElement(it, depth + 1) })
-                }
-                else -> JsonPrimitive(truncateString(value.toString()))
+            } catch (error: Exception) {
+                MGMLogger.warn("Failed to convert event property: ${error.message}")
+                JsonNull
             }
         }
 

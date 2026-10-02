@@ -10,6 +10,9 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +50,8 @@ class MostlyGoodMetrics private constructor(
     private val networkClient: NetworkClientInterface,
     private val prefs: SharedPreferences?,
     private val processLifecycle: Lifecycle?,
-    private val dispatchLifecycleAction: ((() -> Unit) -> Unit)
+    private val dispatchLifecycleAction: ((() -> Unit) -> Unit),
+    backgroundDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
     /**
      * Primary constructor for production use.
@@ -65,9 +69,19 @@ class MostlyGoodMetrics private constructor(
         dispatchLifecycleAction = ::dispatchOnMainThread
     )
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // SupervisorJob keeps sibling work alive; it does not handle exceptions.
+    // Contain ordinary failures at the SDK boundary instead of forwarding them
+    // to Android's process-terminating uncaught-exception handler.
+    private val exceptionHandler = CoroutineExceptionHandler { _, error ->
+        if (error !is Exception) throw error
+        MGMLogger.error("Background analytics operation failed", error)
+    }
+    private val scope = CoroutineScope(SupervisorJob() + backgroundDispatcher + exceptionHandler)
     private var flushJob: Job? = null
     private val isFlushing = AtomicBoolean(false)
+    private val contextProviderActive = object : ThreadLocal<Boolean>() {
+        override fun initialValue(): Boolean = false
+    }
     @Volatile
     private var lifecycleObserver: DefaultLifecycleObserver? = null
 
@@ -109,6 +123,7 @@ class MostlyGoodMetrics private constructor(
     /**
      * Current user identifier. Persisted across app launches.
      */
+    @Volatile
     var userId: String? = null
         private set
 
@@ -116,6 +131,7 @@ class MostlyGoodMetrics private constructor(
      * Anonymous user ID. Auto-generated and persisted across app launches.
      * Format: $anon_xxxxxxxxxxxx (12 random alphanumeric chars)
      */
+    @Volatile
     var anonymousId: String = ""
         private set
 
@@ -128,6 +144,7 @@ class MostlyGoodMetrics private constructor(
     /**
      * Current session identifier. Generated per app launch.
      */
+    @Volatile
     var sessionId: String = UUID.randomUUID().toString()
         private set
 
@@ -156,16 +173,21 @@ class MostlyGoodMetrics private constructor(
 
         // Restore opt-out state before anything can track or send. A persisted
         // choice wins; otherwise fall back to the configured default.
-        optedOut.set(prefs?.getBoolean(KEY_OPTED_OUT, configuration.optedOutByDefault)
-            ?: configuration.optedOutByDefault)
+        optedOut.set(try {
+            prefs?.getBoolean(KEY_OPTED_OUT, configuration.optedOutByDefault)
+                ?: configuration.optedOutByDefault
+        } catch (error: Exception) {
+            MGMLogger.warn("Cannot read analytics consent; remaining opted out: ${error.message}")
+            true
+        })
 
         // Restore user ID
-        userId = prefs?.getString(KEY_USER_ID, null)
+        userId = readPreference(null) { it.getString(KEY_USER_ID, null) }
 
         // Restore or generate anonymous ID
-        anonymousId = prefs?.getString(KEY_ANONYMOUS_ID, null) ?: run {
+        anonymousId = readPreference(null) { it.getString(KEY_ANONYMOUS_ID, null) } ?: run {
             val newId = generateAnonymousId()
-            prefs?.edit()?.putString(KEY_ANONYMOUS_ID, newId)?.apply()
+            editPreferences { putString(KEY_ANONYMOUS_ID, newId) }
             newId
         }
 
@@ -183,7 +205,7 @@ class MostlyGoodMetrics private constructor(
         }
 
         // Restore persisted exposure dedup state
-        prefs?.getStringSet(KEY_EXPERIMENT_EXPOSURES, null)?.let { trackedExposures.addAll(it) }
+        readPreference(null) { it.getStringSet(KEY_EXPERIMENT_EXPOSURES, null) }?.let { trackedExposures.addAll(it) }
 
         when (configuration.experimentMode) {
             MGMExperimentMode.SERVER -> {
@@ -216,7 +238,7 @@ class MostlyGoodMetrics private constructor(
 
         localExperimentConfigs = loadCachedConfigs().associateBy { it.name }
 
-        val lastFetchAt = prefs?.getLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, 0L) ?: 0L
+        val lastFetchAt = readPreference(0L) { it.getLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, 0L) }
         if (System.currentTimeMillis() - lastFetchAt < EXPERIMENTS_REFETCH_INTERVAL_MS) {
             MGMLogger.debug("Skipping experiment configs refetch (throttled), serving cached configs")
             experimentsLoadDeferred.complete(Unit)
@@ -230,9 +252,7 @@ class MostlyGoodMetrics private constructor(
                         // Atomic swap: a single volatile write, never a clear-then-set.
                         localExperimentConfigs = result.experiments.associateBy { it.name }
                         saveCachedConfigs(result.experiments)
-                        prefs?.edit()
-                            ?.putLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, System.currentTimeMillis())
-                            ?.apply()
+                        editPreferences { putLong(KEY_EXPERIMENT_CONFIGS_LAST_FETCH, System.currentTimeMillis()) }
                         MGMLogger.debug("Loaded ${result.experiments.size} experiment configs")
                     }
                     is ExperimentConfigsResult.Failure -> {
@@ -249,7 +269,7 @@ class MostlyGoodMetrics private constructor(
      * Load the persisted experiment config cache. The cache never expires.
      */
     private fun loadCachedConfigs(): List<MGMExperimentConfig> {
-        val json = prefs?.getString(KEY_EXPERIMENT_CONFIGS, null) ?: return emptyList()
+        val json = readPreference(null) { it.getString(KEY_EXPERIMENT_CONFIGS, null) } ?: return emptyList()
         return try {
             val array = org.json.JSONArray(json)
             val configs = mutableListOf<MGMExperimentConfig>()
@@ -286,7 +306,7 @@ class MostlyGoodMetrics private constructor(
                         .put("variants", org.json.JSONArray(config.variants))
                 )
             }
-            prefs?.edit()?.putString(KEY_EXPERIMENT_CONFIGS, array.toString())?.apply()
+            editPreferences { putString(KEY_EXPERIMENT_CONFIGS, array.toString()) }
         } catch (e: Exception) {
             MGMLogger.warn("Failed to save cached experiment configs: ${e.message}")
         }
@@ -307,7 +327,7 @@ class MostlyGoodMetrics private constructor(
         }
 
         val userId = effectiveUserId
-        val lastFetchAt = prefs?.getLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, 0L) ?: 0L
+        val lastFetchAt = readPreference(0L) { it.getLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, 0L) }
         if (System.currentTimeMillis() - lastFetchAt < EXPERIMENTS_REFETCH_INTERVAL_MS) {
             MGMLogger.debug("Skipping experiments refetch (throttled), serving cached variants")
             experimentsLoadDeferred.complete(Unit)
@@ -339,9 +359,7 @@ class MostlyGoodMetrics private constructor(
                 // Atomic swap: a single volatile write, never a clear-then-set.
                 assignedVariants = result.assignedVariants
                 saveCachedVariants(userId, result.assignedVariants)
-                prefs?.edit()
-                    ?.putLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, System.currentTimeMillis())
-                    ?.apply()
+                editPreferences { putLong(KEY_EXPERIMENTS_LAST_FETCH_PREFIX + userId, System.currentTimeMillis()) }
                 MGMLogger.debug("Loaded ${result.assignedVariants.size} assigned variants")
             }
             is ExperimentsResult.Failure -> {
@@ -354,7 +372,7 @@ class MostlyGoodMetrics private constructor(
      * Load the persisted variant cache for a user. The cache never expires.
      */
     private fun loadCachedVariants(userId: String): Map<String, String> {
-        val json = prefs?.getString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, null) ?: return emptyMap()
+        val json = readPreference(null) { it.getString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, null) } ?: return emptyMap()
         return try {
             val jsonObject = org.json.JSONObject(json)
             val variants = mutableMapOf<String, String>()
@@ -373,7 +391,7 @@ class MostlyGoodMetrics private constructor(
     private fun saveCachedVariants(userId: String, variants: Map<String, String>) {
         try {
             val json = org.json.JSONObject(variants as Map<*, *>).toString()
-            prefs?.edit()?.putString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, json)?.apply()
+            editPreferences { putString(KEY_EXPERIMENT_VARIANTS_PREFIX + userId, json) }
         } catch (e: Exception) {
             MGMLogger.warn("Failed to save cached variants: ${e.message}")
         }
@@ -387,48 +405,54 @@ class MostlyGoodMetrics private constructor(
      * @param properties Optional map of custom properties.
      */
     fun track(name: String, properties: Map<String, Any?>? = null) {
-        if (isOptedOut) {
-            MGMLogger.debug("User opted out, dropping event: $name")
-            return
-        }
-
-        if (!MGMEvent.isValidEventName(name)) {
-            if (configuration.enableDebugLogging) {
-                MGMLogger.warn("Invalid event name: $name")
+        try {
+            if (isOptedOut) {
+                MGMLogger.debug("User opted out, dropping event: $name")
+                return
             }
-            return
-        }
 
-        validateDebugProperties(name, properties)
-
-        // Capture caller time before collecting context or queueing persistence.
-        val trackedAt = Date()
-        val mergedProperties = buildProperties(properties)
-
-        val event = MGMEvent.createAt(
-            name = name,
-            timestamp = trackedAt,
-            userId = effectiveUserId,
-            sessionId = sessionId,
-            platform = PLATFORM,
-            appVersion = getAppVersion(),
-            appBuildNumber = getAppBuildNumber(),
-            osVersion = getOsVersion(),
-            environment = configuration.environment,
-            deviceManufacturer = getDeviceManufacturer(),
-            locale = getLocale(),
-            timezone = getTimezone(),
-            properties = mergedProperties
-        )
-
-        if (event != null) {
-            storage.store(event)
-            MGMLogger.debug("Tracked event: $name")
-
-            // Auto-flush if batch size reached
-            if (storage.eventCount() >= configuration.maxBatchSize) {
-                flush()
+            if (!MGMEvent.isValidEventName(name)) {
+                if (configuration.enableDebugLogging) {
+                    MGMLogger.warn("Invalid event name: $name")
+                }
+                return
             }
+
+            validateDebugProperties(name, properties)
+
+            // Capture caller time before collecting context or queueing persistence.
+            val trackedAt = Date()
+            val mergedProperties = buildProperties(properties)
+
+            val event = MGMEvent.createAt(
+                name = name,
+                timestamp = trackedAt,
+                userId = effectiveUserId,
+                sessionId = sessionId,
+                platform = PLATFORM,
+                appVersion = getAppVersion(),
+                appBuildNumber = getAppBuildNumber(),
+                osVersion = getOsVersion(),
+                environment = configuration.environment,
+                deviceManufacturer = getDeviceManufacturer(),
+                locale = getLocale(),
+                timezone = getTimezone(),
+                properties = mergedProperties
+            )
+
+            if (event != null) {
+                storage.store(event)
+                MGMLogger.debug("Tracked event: $name")
+
+                // Auto-flush if batch size reached
+                if (storage.eventCount() >= configuration.maxBatchSize) {
+                    flush()
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            MGMLogger.error("Failed to track event; event dropped", error)
         }
     }
 
@@ -449,7 +473,7 @@ class MostlyGoodMetrics private constructor(
 
         val userChanged = this.userId != userId
         this.userId = userId
-        prefs?.edit()?.putString(KEY_USER_ID, userId)?.apply()
+        editPreferences { putString(KEY_USER_ID, userId) }
         MGMLogger.info("User identified: $userId")
 
         // If profile data is provided, check if we should send $identify event
@@ -476,8 +500,8 @@ class MostlyGoodMetrics private constructor(
      */
     private fun sendIdentifyEventIfNeeded(userId: String, profile: UserProfile) {
         val currentHash = computeIdentifyHash(userId, profile)
-        val storedHash = prefs?.getString(KEY_IDENTIFY_HASH, null)
-        val lastSentAt = prefs?.getLong(KEY_IDENTIFY_TIMESTAMP, 0L) ?: 0L
+        val storedHash = readPreference(null) { it.getString(KEY_IDENTIFY_HASH, null) }
+        val lastSentAt = readPreference(0L) { it.getLong(KEY_IDENTIFY_TIMESTAMP, 0L) }
         val now = System.currentTimeMillis()
 
         val hashChanged = storedHash != currentHash
@@ -500,10 +524,10 @@ class MostlyGoodMetrics private constructor(
             track("\$identify", properties)
 
             // Update stored hash and timestamp
-            prefs?.edit()
-                ?.putString(KEY_IDENTIFY_HASH, currentHash)
-                ?.putLong(KEY_IDENTIFY_TIMESTAMP, now)
-                ?.apply()
+            editPreferences {
+                putString(KEY_IDENTIFY_HASH, currentHash)
+                    .putLong(KEY_IDENTIFY_TIMESTAMP, now)
+            }
         } else {
             MGMLogger.debug("Skipping \$identify event (debounced)")
         }
@@ -525,10 +549,9 @@ class MostlyGoodMetrics private constructor(
      * Clear identify debounce state.
      */
     private fun clearIdentifyState() {
-        prefs?.edit()
-            ?.remove(KEY_IDENTIFY_HASH)
-            ?.remove(KEY_IDENTIFY_TIMESTAMP)
-            ?.apply()
+        editPreferences {
+            remove(KEY_IDENTIFY_HASH).remove(KEY_IDENTIFY_TIMESTAMP)
+        }
     }
 
     /**
@@ -542,7 +565,7 @@ class MostlyGoodMetrics private constructor(
     @JvmOverloads
     fun resetIdentity(clearAnonymousId: Boolean = false) {
         userId = null
-        prefs?.edit()?.remove(KEY_USER_ID)?.apply()
+        editPreferences { remove(KEY_USER_ID) }
         clearIdentifyState()
 
         if (clearAnonymousId) {
@@ -562,7 +585,7 @@ class MostlyGoodMetrics private constructor(
     fun resetAnonymousId() {
         val newId = generateAnonymousId()
         anonymousId = newId
-        prefs?.edit()?.putString(KEY_ANONYMOUS_ID, newId)?.apply()
+        editPreferences { putString(KEY_ANONYMOUS_ID, newId) }
         MGMLogger.info("Anonymous ID reset")
     }
 
@@ -576,8 +599,8 @@ class MostlyGoodMetrics private constructor(
      */
     fun optOut() {
         optedOut.set(true)
-        prefs?.edit()?.putBoolean(KEY_OPTED_OUT, true)?.apply()
-        storage.clear()
+        editPreferences { putBoolean(KEY_OPTED_OUT, true) }
+        clearPendingEvents()
         MGMLogger.info("User opted out of tracking; pending events purged")
     }
 
@@ -586,7 +609,7 @@ class MostlyGoodMetrics private constructor(
      */
     fun optIn() {
         optedOut.set(false)
-        prefs?.edit()?.putBoolean(KEY_OPTED_OUT, false)?.apply()
+        editPreferences { putBoolean(KEY_OPTED_OUT, false) }
         MGMLogger.info("User opted in to tracking")
     }
 
@@ -621,10 +644,14 @@ class MostlyGoodMetrics private constructor(
      * @param properties Map of properties to set
      */
     fun setSuperProperties(properties: Map<String, Any?>) {
-        val current = getSuperProperties().toMutableMap()
-        current.putAll(properties)
-        saveSuperProperties(current)
-        MGMLogger.debug("Set super properties: ${properties.keys.joinToString(", ")}")
+        try {
+            val current = getSuperProperties().toMutableMap()
+            current.putAll(snapshotProperties(properties))
+            saveSuperProperties(current)
+            MGMLogger.debug("Set super properties: ${current.keys.joinToString(", ")}")
+        } catch (error: Exception) {
+            MGMLogger.warn("Failed to read super properties: ${error.message}")
+        }
     }
 
     /**
@@ -643,7 +670,7 @@ class MostlyGoodMetrics private constructor(
      * Clear all super properties.
      */
     fun clearSuperProperties() {
-        prefs?.edit()?.remove(KEY_SUPER_PROPERTIES)?.apply()
+        editPreferences { remove(KEY_SUPER_PROPERTIES) }
         MGMLogger.debug("Cleared all super properties")
     }
 
@@ -653,7 +680,7 @@ class MostlyGoodMetrics private constructor(
      * @return Map of super properties
      */
     fun getSuperProperties(): Map<String, Any?> {
-        val json = prefs?.getString(KEY_SUPER_PROPERTIES, null) ?: return emptyMap()
+        val json = readPreference(null) { it.getString(KEY_SUPER_PROPERTIES, null) } ?: return emptyMap()
         return try {
             @Suppress("UNCHECKED_CAST")
             org.json.JSONObject(json).toMap()
@@ -665,8 +692,8 @@ class MostlyGoodMetrics private constructor(
 
     private fun saveSuperProperties(properties: Map<String, Any?>) {
         try {
-            val json = org.json.JSONObject(properties).toString()
-            prefs?.edit()?.putString(KEY_SUPER_PROPERTIES, json)?.apply()
+            val json = MGMEvent.convertToJsonObject(properties)?.toString() ?: return
+            editPreferences { putString(KEY_SUPER_PROPERTIES, json) }
         } catch (e: Exception) {
             MGMLogger.warn("Failed to save super properties: ${e.message}")
         }
@@ -741,10 +768,10 @@ class MostlyGoodMetrics private constructor(
         val config = localExperimentConfigs[experimentName] ?: return null
 
         val assignmentKey = KEY_LOCAL_EXPERIMENT_ASSIGNMENT_PREFIX + config.id
-        prefs?.getString(assignmentKey, null)?.let { return it }
+        readPreference(null) { it.getString(assignmentKey, null) }?.let { return it }
 
         val variant = LocalExperimentBucketing.variantFor(config, effectiveUserId) ?: return null
-        prefs?.edit()?.putString(assignmentKey, variant)?.apply()
+        editPreferences { putString(assignmentKey, variant) }
         MGMLogger.debug("Locally bucketed experiment '$experimentName' (${config.id}) to variant '$variant'")
         return variant
     }
@@ -778,9 +805,7 @@ class MostlyGoodMetrics private constructor(
         val exposureKey = "$effectiveUserId|$experimentName|$variant"
         if (!trackedExposures.add(exposureKey)) return
 
-        prefs?.edit()
-            ?.putStringSet(KEY_EXPERIMENT_EXPOSURES, trackedExposures.toSet())
-            ?.apply()
+        editPreferences { putStringSet(KEY_EXPERIMENT_EXPOSURES, synchronized(trackedExposures) { trackedExposures.toSet() }) }
 
         track(
             "\$experiment_exposure",
@@ -816,27 +841,52 @@ class MostlyGoodMetrics private constructor(
     /**
      * Manually flush pending events to the server.
      *
-     * @param completion Optional callback when flush completes.
+     * @param completion Optional callback delivered on the Android main thread.
+     * Ordinary exceptions from the callback are logged and ignored.
      */
     fun flush(completion: ((Result<Unit>) -> Unit)? = null) {
         if (isOptedOut) {
             MGMLogger.debug("User opted out, skipping flush")
-            completion?.invoke(Result.success(Unit))
+            deliverFlushCompletion(completion, Result.success(Unit))
             return
         }
 
         scope.launch {
-            flushInternal()
-            completion?.invoke(Result.success(Unit))
+            deliverFlushCompletion(completion, performFlush())
         }
+    }
+
+    private fun deliverFlushCompletion(completion: ((Result<Unit>) -> Unit)?, result: Result<Unit>) {
+        if (completion == null) return
+        dispatchLifecycleAction {
+            try {
+                completion(result)
+            } catch (error: Exception) {
+                MGMLogger.error("Flush completion failed", error)
+            }
+        }
+    }
+
+    private suspend fun performFlush(): Result<Unit> = try {
+        flushInternal()
+        Result.success(Unit)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        MGMLogger.error("Failed to flush events; preserving pending events for retry", error)
+        Result.failure(error)
     }
 
     /**
      * Clear all pending events without sending them.
      */
     fun clearPendingEvents() {
-        storage.clear()
-        MGMLogger.info("Pending events cleared")
+        try {
+            storage.clear()
+            MGMLogger.info("Pending events cleared")
+        } catch (error: Exception) {
+            MGMLogger.error("Failed to clear pending events", error)
+        }
     }
 
     private suspend fun flushInternal() {
@@ -897,8 +947,10 @@ class MostlyGoodMetrics private constructor(
         flushJob?.cancel()
         flushJob = scope.launch {
             while (true) {
-                delay(configuration.flushIntervalSeconds * 1000)
-                flushInternal()
+                // Prevent a huge seconds value wrapping into a zero/negative
+                // delay and spinning continuously on the caller's CPU.
+                delay(configuration.flushIntervalSeconds.coerceAtMost(Long.MAX_VALUE / 1000) * 1000)
+                performFlush()
             }
         }
     }
@@ -934,7 +986,7 @@ class MostlyGoodMetrics private constructor(
 
     private fun trackInstallOrUpdate() {
         val currentVersion = getAppVersion()
-        val storedVersion = prefs?.getString(KEY_APP_VERSION, null)
+        val storedVersion = readPreference(null) { it.getString(KEY_APP_VERSION, null) }
 
         when {
             storedVersion == null -> {
@@ -954,7 +1006,18 @@ class MostlyGoodMetrics private constructor(
             }
         }
 
-        prefs?.edit()?.putString(KEY_APP_VERSION, currentVersion)?.apply()
+        editPreferences { putString(KEY_APP_VERSION, currentVersion) }
+    }
+
+    private fun snapshotProperties(properties: Map<String, Any?>): Map<String, Any?> {
+        // Bound the initial snapshot too, before JSON conversion gets its budget.
+        val snapshot = linkedMapOf<String, Any?>()
+        var remaining = 1024
+        for ((key, value) in properties) {
+            if (remaining-- <= 0) break
+            snapshot[key] = value
+        }
+        return snapshot
     }
 
     private fun buildProperties(userProperties: Map<String, Any?>?): Map<String, Any?> {
@@ -971,16 +1034,27 @@ class MostlyGoodMetrics private constructor(
         val superProperties = getSuperProperties()
         val merged = superProperties.toMutableMap()
 
-        val dynamicContext = try {
-            configuration.contextProvider?.invoke().orEmpty()
-        } catch (e: Exception) {
-            MGMLogger.warn("Context provider failed; tracking event without dynamic context: ${e.message}")
+        val dynamicContext = if (contextProviderActive.get()) {
+            // A provider can call track(); that nested event skips the provider
+            // rather than recursively overflowing the app thread's stack.
             emptyMap()
+        } else {
+            contextProviderActive.set(true)
+            try {
+                configuration.contextProvider?.invoke()?.let(::snapshotProperties).orEmpty()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                MGMLogger.warn("Context provider failed; tracking event without dynamic context: ${e.message}")
+                emptyMap()
+            } finally {
+                contextProviderActive.remove()
+            }
         }
         merged.putAll(dynamicContext)
 
         if (userProperties != null) {
-            merged.putAll(userProperties)
+            merged.putAll(snapshotProperties(userProperties))
         }
 
         merged.putAll(systemProperties)
@@ -1063,7 +1137,30 @@ class MostlyGoodMetrics private constructor(
         }
         flushJob?.cancel()
         scope.cancel()
-        (storage as? CloseableEventStorage)?.close()
+        try {
+            (storage as? CloseableEventStorage)?.close()
+        } catch (error: Exception) {
+            MGMLogger.error("Failed to close analytics storage", error)
+        }
+    }
+
+    private fun <T> readPreference(fallback: T, read: (SharedPreferences) -> T): T = try {
+        prefs?.let(read) ?: fallback
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        MGMLogger.warn("Failed to read analytics preference: ${error.message}")
+        fallback
+    }
+
+    private fun editPreferences(edit: SharedPreferences.Editor.() -> Unit) {
+        try {
+            prefs?.edit()?.apply(edit)?.apply()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            MGMLogger.warn("Failed to persist analytics preference: ${error.message}")
+        }
     }
 
     companion object {
@@ -1427,7 +1524,8 @@ class MostlyGoodMetrics private constructor(
             networkClient: NetworkClientInterface,
             prefs: SharedPreferences? = null,
             processLifecycle: Lifecycle? = null,
-            dispatchLifecycleAction: ((() -> Unit) -> Unit) = { action -> action() }
+            dispatchLifecycleAction: ((() -> Unit) -> Unit) = { action -> action() },
+            backgroundDispatcher: CoroutineDispatcher = Dispatchers.Default
         ): MostlyGoodMetrics {
             return MostlyGoodMetrics(
                 context = null,
@@ -1436,7 +1534,8 @@ class MostlyGoodMetrics private constructor(
                 networkClient = networkClient,
                 prefs = prefs,
                 processLifecycle = processLifecycle,
-                dispatchLifecycleAction = dispatchLifecycleAction
+                dispatchLifecycleAction = dispatchLifecycleAction,
+                backgroundDispatcher = backgroundDispatcher
             )
         }
     }
