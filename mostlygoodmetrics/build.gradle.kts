@@ -3,7 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     `maven-publish`
-    jacoco
 }
 
 // Single source of truth for the SDK/artifact version. Release CI bumps this
@@ -59,39 +58,6 @@ android {
             withJavadocJar()
         }
     }
-}
-
-// Coverage report for Covallaby (JaCoCo XML).
-// Best-effort wiring — see the Covallaby PR notes. Module/task/path names may
-// need maintainer adjustment.
-tasks.register<JacocoReport>("jacocoTestReport") {
-    dependsOn("testDebugUnitTest")
-
-    reports {
-        xml.required.set(true)
-        html.required.set(true)
-    }
-
-    val fileFilter = listOf(
-        "**/R.class",
-        "**/R\$*.class",
-        "**/BuildConfig.*",
-        "**/Manifest*.*",
-        "**/*Test*.*",
-        "android/**/*.*"
-    )
-
-    val debugTree = fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {
-        exclude(fileFilter)
-    }
-
-    classDirectories.setFrom(debugTree)
-    sourceDirectories.setFrom(files("$projectDir/src/main/java"))
-    executionData.setFrom(
-        fileTree(layout.buildDirectory.get()) {
-            include("**/*.exec", "**/*.ec")
-        }
-    )
 }
 
 dependencies {
